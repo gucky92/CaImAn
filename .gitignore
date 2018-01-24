@@ -187,4 +187,8 @@ $RECYCLE.BIN/
 python36condaforge.txt
 python36condaforge.yml
 
+#notebooks
+demo_pipeline_cnmfE.ipynb
+demo_pipeline.ipynb
+
 # End of https://www.gitignore.io/api/macos,python,windows
