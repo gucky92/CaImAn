@@ -284,7 +284,7 @@ def cnmf_run(fname: str, cnmf_params: Dict): #fname is a full path, mmap file
 	cnm = cnmf.CNMF(**cnmf_params)
 	cnm.fit(Yr)
 	#get results
-	A, C, b, f, YrA, sn, conv = cnm.A, cnm.C, cnm.b, cnm.f, cnm.YrA, cnm.sn, cnm.OASISinstances
+	A, C, b, f, YrA, sn, conv = cnm.A, cnm.C, cnm.b, cnm.f, cnm.YrA, cnm.sn, cnm.S
 	print("(Sparse) Mem Size A: {0}, Mem Size C: {1}".format(getsizeof(A), getsizeof(C)))
 	print("(Dense) Mem Size A: {0}, Mem Size C: {1}".format(np.asarray(A).nbytes, np.asarray(A).nbytes))
 	idx_components = np.arange(A.shape[-1])
