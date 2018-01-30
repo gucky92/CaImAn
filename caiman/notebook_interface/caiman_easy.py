@@ -237,21 +237,26 @@ def run_mc(fnames, mc_params, dsfactors, rigid=True, batch=True):
 		for old_f in mc_list:
 			if rigid:
 				try:
-					os.remove(old_f.fname_tot_rig)
+					print("Deleting: {}".format(old_f.fname_tot_rig))
+					os.remove(old_f.fname_tot_rig[0])
 				except PermissionError:
 					print("PermissionError: Cannot delete temporary file. (Non-Fatal)")
 			else:
 				try:
-					os.remove(old_f.fname_tot_els)
+					print("Deleting: {}".format(old_f.fname_tot_els))
+					os.remove(old_f.fname_tot_els[0])
 				except PermissionError:
 					print("PermissionError: Cannot delete temporary file. (Non-Fatal)")
 		return [combined_file]
 	else:
 		return mc_list
 
+def flatten(l):
+	return [item for sublist in l for item in sublist]
 
-def combine_mc_mmaps(mc_list, dview):
+def combine_mc_mmaps(mc_list : List, dview):
 	mc_names = [i.fname_tot_rig for i in mc_list]
+	mc_names = flatten(mc_names)
 	mc_mov_name = save_memmap_join(mc_names, base_name='mc_rig', dview=dview)
 	print(mc_mov_name)
 	return mc_mov_name

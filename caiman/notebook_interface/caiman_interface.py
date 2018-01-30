@@ -556,11 +556,12 @@ def show_cnmf_results_interface():
 	#for updating individual ROI spatial footprint
 	def get_roi_image(A,index,dims):
 		img = A[:,index].reshape(dims[1],dims[0]).T
-		img_file = io.BytesIO()
-		plt.imsave(img_file, img, format='PNG')
-		data = bytes(img_file.getbuffer())
-		img_file.close()
-		return data
+		#img_file = io.BytesIO()
+		with io.BytesIO() as img_file:
+			plt.imsave(img_file, img, format='PNG')
+			data = bytes(img_file.getbuffer())
+			#img_file.close()
+			return data
 	#correlation image, background
 	cor_image_mark = bqplot.Image(image = cor_image, scales={'x': scale_x, 'y': scale_y})#, scales={'x': scale_x, 'y': scale_y}
 	#reconstructed neuronal spatial maps
@@ -598,6 +599,12 @@ def show_cnmf_results_interface():
 		else:
 			return 1
 
+	def toggle_deconv(change):
+		if deconv_chk.value:
+			deconv_signal_mark.visible = True
+		else:
+			deconv_signal_mark.visible = False
+
 
 	contour_x,contour_y = get_contour_coords(0)
 	contour_mark = bqplot.Lines(x = contour_x, y = contour_y, colors=['yellow'], scales={'x': scale_x2, 'y': scale_y2})
@@ -618,6 +625,7 @@ def show_cnmf_results_interface():
 
 	# Fluorescence trace
 	scale_x4 = bqplot.LinearScale(min=0.0, max=C.shape[1])
+	scale_x5 = bqplot.LinearScale(min=0.0, max=conv.shape[1])
 	deconv = True if conv is not None else False
 	init_signal = get_signal(roi_slider.value, deconv) #returns tuple (C, S) if deconv is True, else returns (C, None)
 	init_signal_max = init_signal[0].max()
@@ -626,10 +634,11 @@ def show_cnmf_results_interface():
 	if type(conv) == np.ndarray: #or deconv=True
 		init_deconv_signal_max = init_signal[1].max()
 	scale_y4 = bqplot.LinearScale(min=0.0, max=(1.10 * init_signal_max)) # add 10% to give some upper margin
+	scale_y5 = bqplot.LinearScale(min=0.0, max=(1.10 * init_deconv_signal_max)) # add 10% to give some upper margin
 	signal_mark = bqplot.Lines(x = np.arange(C.shape[1]), y = init_signal[0], colors=['black'],
 							   scales={'x': scale_x4, 'y': scale_y4}, display_legend=True)
-	deconv_signal_mark = bqplot.Lines(x = np.arange(C.shape[1]), colors=['red'],
-							  scales={'x': scale_x4, 'y': scale_y4}, display_legend=True)
+	deconv_signal_mark = bqplot.Lines(x = np.arange(C.shape[1]), y=init_signal[1], colors=['red'],
+							  scales={'x': scale_x5, 'y': scale_y5}, display_legend=True, visible=False)
 	if init_signal[1] is not None:
 		deconv_signal_mark.y = init_signal[1]
 
@@ -666,6 +675,14 @@ def show_cnmf_results_interface():
 		tooltip='Compute the delta F/F values',
 		layout=widgets.Layout(width="18%")
 	)
+	deconv_chk = widgets.Checkbox(
+		value=False,
+		description='Deconvolution',
+		disabled=False,
+		tooltip='Show the results of deconvolution (if applicable)',
+		layout=widgets.Layout(width="22%")
+	)
+	deconv_chk.observe(toggle_deconv)
 
 	def delete_roi_func(_):
 		delete_list_widget.options += (roi_slider.value,)
@@ -700,7 +717,8 @@ def show_cnmf_results_interface():
 	def slider_change(change):
 		contour_mark.x,contour_mark.y = get_contour_coords(change-1)
 		roi_image_mark.image = widgets.Image(value=get_roi_image(A,(change-1),dims))
-		new_signal = get_signal(change-1)
+		deconv = True if conv is not None else False
+		new_signal = get_signal(change-1, deconv)
 		signal_mark.y = new_signal[0]
 		new_signal_max = new_signal[0].max()
 		if new_signal[1] is not None:
@@ -713,7 +731,7 @@ def show_cnmf_results_interface():
 	l2 = traitlets.directional_link((rois, 'selected'),(roi_slider, 'value'), roi_change)
 	l1 = traitlets.directional_link((roi_slider, 'value'), (rois, 'selected'), slider_change)
 
-	view_cnmf_widget = VBox([VBox([HBox([roi_slider, tb0]), HBox([delete_roi_btn, delete_list_widget, dff_chk, download_btn])]),
+	view_cnmf_widget = VBox([VBox([HBox([roi_slider, tb0]), HBox([delete_roi_btn, delete_list_widget, deconv_chk, dff_chk, download_btn])]),
 		  HBox([fig, fig4]), HBox([fig2, fig3])])
 
 	return view_cnmf_widget
