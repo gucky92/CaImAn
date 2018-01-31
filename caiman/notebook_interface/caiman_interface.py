@@ -600,10 +600,15 @@ def show_cnmf_results_interface():
 			return 1
 
 	def toggle_deconv(change):
-		if deconv_chk.value:
+		if deconv_chk.value == 'Deconvolution':
 			deconv_signal_mark.visible = True
+			signal_mark.visible = False
+		elif deconv_chk.value == 'Both':
+			deconv_signal_mark.visible = True
+			signal_mark.visible = True
 		else:
 			deconv_signal_mark.visible = False
+			signal_mark.visible = True
 
 
 	contour_x,contour_y = get_contour_coords(0)
@@ -675,12 +680,20 @@ def show_cnmf_results_interface():
 		tooltip='Compute the delta F/F values',
 		layout=widgets.Layout(width="18%")
 	)
-	deconv_chk = widgets.Checkbox(
-		value=False,
-		description='Deconvolution',
-		disabled=False,
-		tooltip='Show the results of deconvolution (if applicable)',
-		layout=widgets.Layout(width="22%")
+	# deconv_chk = widgets.Checkbox(
+	# 	value=False,
+	# 	description='Deconvolution',
+	# 	disabled=False,
+	# 	tooltip='Show the results of deconvolution (if applicable)',
+	# 	layout=widgets.Layout(width="22%")
+	# )
+	deconv_chk = widgets.ToggleButtons(
+	    options=['Signal', 'Deconvolution', 'Both'],
+	    description='Plot options:',
+	    disabled=False,
+	    button_style='', # 'success', 'info', 'warning', 'danger' or ''
+	    tooltips=['Denoised/demixed Ca2+ signal', 'Deconvolved Ca2+ signal', 'Plot both'],
+		layout=widgets.Layout(width="18%"),
 	)
 	deconv_chk.observe(toggle_deconv)
 
@@ -695,24 +708,45 @@ def show_cnmf_results_interface():
 		#traces = ma.masked_array(C, mask=delete_list_widget.value)
 
 		adj_c = C
+		adj_s = conv
 		currentDT2 = datetime.datetime.now()
 		ts2_ = currentDT2.strftime("%Y%m%d_%H_%M_%S")
 		metadata_ = ts2_
-		if dff_chk.value == True:
-			#adj_c = detrend_df_f(A, b, C, f, YrA = YrA.T)
-			adj_c = detrend_df_f(A, b, C, f)
-			metadata_ += '_dFF'
-			print("Using dF/F values")
-		traces_path = workingdir_selector.value + 'traces_' + metadata_ + '.csv'
 		deld_rois_ = list(delete_list_widget.value)
 		print("Excluding ROIs: %s" % (deld_rois_))
-		df = pd.DataFrame(data=adj_c)
-		df.index += 1
-		deld_rois = list(map(lambda x: x-1, deld_rois_)) #remove ROIs that the user wants to exclude
-		df.drop(df.index[deld_rois], inplace=True)
+		def save_traces():
+			if dff_chk.value == True:
+				#adj_c = detrend_df_f(A, b, C, f, YrA = YrA.T)
+				adj_c = detrend_df_f(A, b, C, f)
+				metadata_ += '_dFF'
+				print("Using dF/F values")
+			traces_path = workingdir_selector.value + 'traces_' + metadata_ + '.csv'
 
-		df.to_csv(traces_path, header=False)
-		print("Data saved to: %s" % (traces_path))
+			df = pd.DataFrame(data=adj_c)
+			df.index += 1
+			deld_rois = list(map(lambda x: x-1, deld_rois_)) #remove ROIs that the user wants to exclude
+			df.drop(df.index[deld_rois], inplace=True)
+
+			df.to_csv(traces_path, header=False)
+			print("Ca2+ Signal Traces saved to: %s" % (traces_path))
+		def save_deconv():
+			deconv_path = workingdir_selector.value + 'deconv_' + metadata_ + '.csv'
+
+			df = pd.DataFrame(data=adj_s)
+			df.index += 1
+			deld_rois = list(map(lambda x: x-1, deld_rois_)) #remove ROIs that the user wants to exclude
+			df.drop(df.index[deld_rois], inplace=True)
+
+			df.to_csv(deconv_path, header=False)
+			print("Deconvolution data saved to: %s" % (deconv_path))
+
+		if deconv_chk.value == 'Deconvolution':
+			save_deconv()
+		elif deconv_chk.value == 'Both':
+			save_traces()
+			save_deconv()
+		else:
+			save_traces()
 
 	def slider_change(change):
 		contour_mark.x,contour_mark.y = get_contour_coords(change-1)
