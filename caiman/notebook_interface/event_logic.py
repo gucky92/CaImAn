@@ -199,7 +199,7 @@ def convToDF(results):
 
 #start_event_btn.on_click(show_plot)
 settings_box = HBox([min_thresh_widget, min_ampl_widget, fr_widget])
-results_area = HBox()
+results_area = VBox()
 ret_box = VBox([settings_box,start_event_btn,results_area])
 
 def set_event_widgets():
@@ -248,7 +248,7 @@ def show_plot():
     tb0 = Toolbar(figure=fig)
 
     out = Output()
-    event_results_widget = qgrid.QgridWidget(df=df_results, show_toolbar=True, grid_options={'autoHeight':False})
+    event_results_widget = qgrid.QgridWidget(df=df_results, show_toolbar=True)
     def update_plot(change):
         cur_roi2 = (roi_slider_widget.value - 1)
         new_signal = signal_data[cur_roi2]

@@ -97,6 +97,7 @@ def run_mc_ui(_):
 	#call run_mc
 	#< run_mc(fnames, mc_params, rigid=True, batch=True) > returns list of mmap file names
 	dsfactors = (float(dsx_widget.value),float(dsy_widget.value),float(dst_widget.value)) #or (1,1,1)   (ds x, ds y, ds t)
+	context.mc_dsfactors = dsfactors
 	mc_results = run_mc(context.working_mc_files, mc_params, dsfactors, rigid=is_rigid, batch=is_batch)
 	if is_rigid:
 		context.mc_rig = mc_results
@@ -113,18 +114,32 @@ major_col.children = [file_box,is_batch_widget,settings, run_mc_btn]
 
 def show_movies(_):
 	# play motion corrected movies
-	orig_mov_widget = widgets.HTML(
-		value=play_movie(cm.load(context.working_mc_files[0]),cmap='gist_gray').data,
-		description='Original Movie',
-	)
-	mov_mc_ = cm.load(context.mc_rig[0]) if len(context.mc_rig) > 0 else cm.load(context.mc_nonrig[0])
-	mc_mov_widget = widgets.HTML(
-		value= play_movie(mov_mc_,cmap='gist_gray').data,
-		description='Motion Corrected',
-	)
-	mov_row = widgets.HBox()
-	mov_row.children = [orig_mov_widget, mc_mov_widget]
-	display(mov_row)
+	# orig_mov_widget = widgets.HTML(
+	# 	value=play_movie(cm.load(context.working_mc_files[0]),cmap='gist_gray').data,
+	# 	description='Original Movie',
+	# )
+	# mov_mc_ = cm.load(context.mc_rig[0]) if len(context.mc_rig) > 0 else cm.load(context.mc_nonrig[0])
+	# mc_mov_widget = widgets.HTML(
+	# 	value= play_movie(mov_mc_,cmap='gist_gray').data,
+	# 	description='Motion Corrected',
+	# )
+	# mov_row = widgets.HBox()
+	# mov_row.children = [orig_mov_widget, mc_mov_widget]
+	# display(mov_row)
+	orig_mov = cm.load(context.working_mc_files)
+	mc_mov = cm.load(context.mc_rig[0]) if len(context.mc_rig) > 0 else cm.load(context.mc_nonrig[0])
+	#print("Orig Mov size: {}".format(orig_mov.shape))
+	#print("Orig Mov re-size: {}".format(orig_mov.resize(*context.mc_dsfactors).shape))
+	#print("MC Mov size: {}".format(mc_mov.shape))
+	#%% compare with original movie
+	#downsample_ratio = 1.0
+	offset_mov = -np.min(orig_mov[:100])  # make the dataset mostly non-negative
+	cm.concatenate([orig_mov.resize(*context.mc_dsfactors)+offset_mov,
+                mc_mov.resize(1,1,1)],
+               axis=2).play(fr=60, offset=0)  # press q to exit
+			   #.play(fr=60, gain=15, magnification=2, offset=0)
+	#orig_mov.play()
+	#mc_mov.play()
 
 
 play_mov_btn.on_click(show_movies)
@@ -406,7 +421,8 @@ def show_cnmf_results_interface():
 
 	# Fluorescence trace
 	scale_x4 = bqplot.LinearScale(min=0.0, max=C.shape[1])
-	scale_x5 = bqplot.LinearScale(min=0.0, max=conv.shape[1])
+	if conv is not None:
+		scale_x5 = bqplot.LinearScale(min=0.0, max=conv.shape[1])
 	deconv = True if conv is not None else False
 	init_signal = get_signal(roi_slider.value, deconv) #returns tuple (C, S) if deconv is True, else returns (C, None)
 	init_signal_max = init_signal[0].max()

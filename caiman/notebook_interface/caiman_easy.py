@@ -67,6 +67,7 @@ class Context: #used to save data related to analysis (not serializable)
 		self.working_dir = ''
 		self.working_mc_files = [] #str path
 		self.working_cnmf_file = None  #str path
+		self.mc_dsfactors = None  #downsample factors: [x,y,t]
 
 		self.mc_rig = []    #rigid mc results
 		self.mc_nonrig = [] #non-rigid mc results
@@ -110,7 +111,8 @@ class Context: #used to save data related to analysis (not serializable)
 			self.idx_components_keep,
 			self.idx_components_toss,
 			tmp_cnmf_params,
-			self.correlation_img
+			self.correlation_img,
+			self.mc_dsfactors
 		]
 		save_obj(path, tmpd)
 		print("Context saved to: %s" % (path,))
@@ -122,10 +124,14 @@ class Context: #used to save data related to analysis (not serializable)
 			self.n_processes = cluster[2]
 
 		tmpd = load_obj(path)
-
-		self.working_dir, self.working_mc_files, self.working_cnmf_file, self.mc_rig, \
-		self.mc_nonrig, self.YrDT, self.cnmf_results, self.idx_components_keep, \
-		self.idx_components_toss, self.cnmf_params, self.correlation_img = tmpd
+		if len(tmpd) == 11: #for backward compatibility
+			self.working_dir, self.working_mc_files, self.working_cnmf_file, self.mc_rig, \
+			self.mc_nonrig, self.YrDT, self.cnmf_results, self.idx_components_keep, \
+			self.idx_components_toss, self.cnmf_params, self.correlation_img = tmpd
+		else:
+			self.working_dir, self.working_mc_files, self.working_cnmf_file, self.mc_rig, \
+			self.mc_nonrig, self.YrDT, self.cnmf_results, self.idx_components_keep, \
+			self.idx_components_toss, self.cnmf_params, self.correlation_img, self.mc_dsfactors = tmpd
 		print("Context loaded from: %s" % (path,))
 
 
@@ -376,7 +382,7 @@ def corr_img(Yr: np.ndarray, gSig: int, center_psf :bool, plot=True):
 	return cn_raw, cn_filter, pnr, plot_
 
 def save_denoised_avi(data, dims, idx_components_keep, working_dir=""):
-	A, C, b, f, YrA, sn, idx_components = data
+	A, C, b, f, YrA, sn, idx_components, conv = data
 	idx_components = idx_components_keep
 	x = None
 	if type(A) != np.ndarray:
