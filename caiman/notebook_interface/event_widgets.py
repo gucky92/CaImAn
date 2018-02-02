@@ -61,3 +61,12 @@ dl_events_data_btn = widgets.Button(
     icon='check',
     width=200,
 )
+
+show_all_events_btn = widgets.Button(
+    description='Show All Events',
+    disabled=False,
+    button_style='', # 'success', 'info', 'warning', 'danger' or ''
+    tooltip='Show all events in data table',
+    icon='check',
+    width=200,
+)

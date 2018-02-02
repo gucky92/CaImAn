@@ -1,4 +1,5 @@
-
+from ipywidgets import interact, interactive, fixed, interact_manual, HBox, VBox, IntSlider, Play, jslink
+import ipywidgets as widgets
 import bqplot
 from bqplot import (
 	LogScale, LinearScale, OrdinalColorScale, ColorAxis,
@@ -13,7 +14,6 @@ import os
 import numpy as np
 
 from caiman_easy import *
-from interface_widgets import *
 #from event_logic import *
 
 '''
@@ -25,9 +25,41 @@ Nov 2017
 #create context
 context = Context(start_procs(10))
 
-
 #motion correction interface
 
+# UX
+workingdir_selector = widgets.Text(
+	value=os.getcwd(),
+	placeholder=os.getcwd(),
+	#description='Working Directory:',
+	layout=widgets.Layout(width='35%'),
+	disabled=False
+)
+workingdir_btn = widgets.Button(
+	description='Set WkDir',
+	disabled=False,
+	button_style='success', # 'success', 'info', 'warning', 'danger' or ''
+	tooltip='Set working directory'
+)
+context_path_txt = widgets.Text(
+	value=os.getcwd(),
+	placeholder=os.getcwd(),
+	#description='Load Context from:',
+	layout=widgets.Layout(width='35%'),
+	disabled=False
+)
+context_load_btn = widgets.Button(
+	description='Load Context',
+	disabled=False,
+	button_style='success', # 'success', 'info', 'warning', 'danger' or ''
+	tooltip='Load Context'
+)
+context_save_btn = widgets.Button(
+	description='Save Context',
+	disabled=False,
+	button_style='success', # 'success', 'info', 'warning', 'danger' or ''
+	tooltip='Save Context'
+)
 def load_context_event(_):
 	context.load(context_path_txt.value)
 
@@ -49,6 +81,20 @@ context_box.children = [widgets.Label("Load context from:"),context_path_txt, co
 wkdir_context_box = widgets.VBox()
 wkdir_context_box.children = [wkdir_box,context_box]
 
+file_selector = widgets.Text(
+	value=os.getcwd(),
+	placeholder=os.getcwd(),
+	description='File/Folder Path:',
+	layout=widgets.Layout(width='50%'),
+	disabled=False
+)
+load_files_btn = widgets.Button(
+	description='Load Files',
+	disabled=False,
+	button_style='success', # 'success', 'info', 'warning', 'danger' or ''
+	tooltip='Load Files',
+	icon='check'
+)
 
 #Get file paths for *.tif and *.avi files, load into the context object
 def load_f(x):
@@ -59,10 +105,66 @@ load_files_btn.on_click(load_f)
 
 file_box = widgets.HBox()
 file_box.children = [file_selector, load_files_btn]
-
+is_batch_widget = widgets.ToggleButtons(
+	options=['Group', 'Independent'],
+	description='Grouped?:',
+	disabled=False,
+	button_style='', # 'success', 'info', 'warning', 'danger' or ''
+	tooltips=['Run all movies together as if one movie', 'Run each movie independently'],
+#     icons=['check'] * 3
+)
+dslabel = widgets.Label(value="Downsample Percentage (height, width, frames/time)")
+ds_layout = widgets.Layout(width="20%")
+dsx_widget = widgets.BoundedFloatText(
+	value=1,
+	min=0.1,
+	max=1.0,
+	step=0.1,
+	description='height:',
+	disabled=False,
+	layout=ds_layout
+)
+dsy_widget = widgets.BoundedFloatText(
+	value=1,
+	min=0.1,
+	max=1.0,
+	step=0.1,
+	description='width:',
+	disabled=False,
+	layout=ds_layout
+)
+dst_widget = widgets.BoundedFloatText(
+	value=1,
+	min=0.1,
+	max=1.0,
+	step=0.1,
+	description='frames:',
+	disabled=False,
+	layout=ds_layout
+)
 ds_factors_box = widgets.HBox()
 ds_factors_box.children = [dsx_widget, dsy_widget, dst_widget]
-
+gSigFilter_widget = widgets.IntSlider(
+	value=7,
+	min=0,
+	max=50,
+	step=1,
+	description='High Pass Filter:',
+	disabled=False,
+	continuous_update=False,
+	orientation='horizontal',
+	readout=True,
+	readout_format='d',
+	tooltip='Gaussian Filter Size (1p data only)'
+)
+is_rigid_widget = widgets.ToggleButtons(
+	options=['Rigid', 'Non-Rigid'],
+	description='MC Mode:',
+	disabled=False,
+	button_style='warning', # 'success', 'info', 'warning', 'danger' or ''
+	tooltips=['Rigid correction (faster)', 'Non-rigid correction (slow, more accurate)'],
+#     icons=['check'] * 3
+)
 basic_settings = widgets.VBox()
 basic_settings.children = [dslabel, ds_factors_box, gSigFilter_widget, is_rigid_widget]
 
@@ -72,7 +174,13 @@ settings = widgets.Accordion(children=[basic_settings, advanced_settings])
 settings.set_title(0, 'Basic MC Settings') #MC = Motion Correction
 settings.set_title(1, 'Advanced MC Settings')
 
-
+run_mc_btn = widgets.Button(
+	description='Run Motion Correction',
+	disabled=False,
+	button_style='info', # 'success', 'info', 'warning', 'danger' or ''
+	tooltip='Run motion correction',
+	layout=widgets.Layout(width="30%")
+)
 
 def run_mc_ui(_):
 	#get settings:
@@ -110,9 +218,9 @@ run_mc_btn.on_click(run_mc_ui)
 major_col = widgets.VBox()
 major_col.children = [file_box,is_batch_widget,settings, run_mc_btn]
 
+# play motion corrected movies
 
 def show_movies(_):
-	# play motion corrected movies
 	orig_mov_widget = widgets.HTML(
 		value=play_movie(cm.load(context.working_mc_files[0]),cmap='gist_gray').data,
 		description='Original Movie',
@@ -126,7 +234,12 @@ def show_movies(_):
 	mov_row.children = [orig_mov_widget, mc_mov_widget]
 	display(mov_row)
 
-
+play_mov_btn = widgets.Button(
+	description='Play Movies',
+	disabled=False,
+	button_style='success', # 'success', 'info', 'warning', 'danger' or ''
+	tooltip='Play Movies'
+)
 play_mov_btn.on_click(show_movies)
 play_mov_btn_box = widgets.HBox()
 play_mov_btn_box.children = [play_mov_btn]
@@ -141,7 +254,13 @@ play_mov_btn_box.children = [play_mov_btn]
 				min_pnr=min_pnr, normalize_init=False, deconvolve_options_init=None,
 				ring_size_factor=1.5, center_psf=True'''
 
-
+cnmf_file_selector = widgets.Text(
+	value=os.getcwd(),
+	placeholder=os.getcwd(),
+	description='File (.mmap):',
+	layout=widgets.Layout(width='50%'),
+	disabled=False
+)
 
 #Get file paths for *.tif and *.avi files, load into the context object
 '''def cnmf_load_f(x):
@@ -149,17 +268,116 @@ play_mov_btn_box.children = [play_mov_btn]
 
 cnmf_file_box = widgets.HBox()
 cnmf_file_box.children = [cnmf_file_selector]
-
+is_patches_widget = widgets.ToggleButtons(
+	value='Single FOV',
+	options=['Patches', 'Single FOV'],
+	description='Patches?:',
+	disabled=False,
+	button_style='', # 'success', 'info', 'warning', 'danger' or ''
+	tooltips=['Run each frame in parallel by breaking into overlapping FOVs', 'The whole frame is analyed as a single FOV'],
+#     icons=['check'] * 3
+)
+dslabel = widgets.Label(value="Downsample Percentage (spatial, temporal)")
+ds_layout = widgets.Layout(width="20%")
+ds_spatial_widget = widgets.BoundedFloatText(
+	value=1.0,
+	min=0.0,
+	max=1.0,
+	step=0.1,
+	description='spatial:',
+	disabled=False,
+	layout=ds_layout
+)
+ds_temporal_widget = widgets.BoundedFloatText(
+	value=1.0,
+	min=0.0,
+	max=1.0,
+	step=0.1,
+	description='temporal:',
+	disabled=False,
+	layout=ds_layout
+)
 basic_row0 = widgets.HBox()
 basic_row0.children = [is_patches_widget]
 
 basic_row1 = widgets.HBox()
 basic_row1.children = [dslabel,ds_spatial_widget,ds_temporal_widget]
-##
+
+k_widget = widgets.BoundedIntText(
+	value=100,
+	min=1,
+	max=1000,
+	step=5,
+	description='K:',
+	tooltip='Expected # Cells (Per Patch)',
+	disabled=False,
+	layout=ds_layout
+)
+gSig_widget = widgets.BoundedIntText(
+	value=4,
+	min=1,
+	max=50,
+	step=1,
+	description='gSig:',
+	tooltip='Gaussian Kernel Size',
+	disabled=False,
+	layout=ds_layout
+)
+gSiz_widget = widgets.BoundedIntText(
+	value=12,
+	min=1,
+	max=50,
+	step=1,
+	description='gSiz:',
+	tooltip='Average Cell Diamter',
+	disabled=False,
+	layout=ds_layout
+)
 basic_row2 = widgets.HBox()
 basic_row2.children = [k_widget, gSig_widget, gSiz_widget]
 
-####
+min_corr_widget = widgets.FloatSlider(
+	value=0.85,
+	min=0.0,
+	max=1.0,
+	step=0.05,
+	description='Min. Corr.:',
+	disabled=False,
+	continuous_update=False,
+	orientation='horizontal',
+	readout=True,
+	readout_format='.2',
+	tooltip='Minimum Correlation'
+)
+min_pnr_widget = widgets.IntSlider(
+	value=15,
+	min=1,
+	max=50,
+	step=1,
+	description='Min. PNR.:',
+	disabled=False,
+	continuous_update=False,
+	orientation='horizontal',
+	readout=True,
+	readout_format='d',
+	tooltip='Minimum Peak-to-Noise Ratio'
+)
+
+deconv_flag_widget = widgets.Checkbox(
+	value=False,
+	description='Run Deconvolution',
+	disabled=False,
+	tooltip='The oasis deconvolution algorithm will run along with CNMF',
+	layout=widgets.Layout(width="30%")
+)
+
+save_movie_widget = widgets.Checkbox(
+	value=False,
+	description='Save Denoised Movie (.avi)',
+	disabled=False,
+	tooltip='Saves a background-substracted and denoised movie',
+	layout=widgets.Layout(width="30%")
+)
 
 #min_corr, min_pnr
 basic_row3 = widgets.HBox()
@@ -177,7 +395,13 @@ cnmf_settings = widgets.Accordion(children=[cnmf_basic_settings, cnmf_advanced_s
 cnmf_settings.set_title(0, 'Basic CNMF-E Settings') #MC = Motion Correction
 cnmf_settings.set_title(1, 'Advanced CNMF-E Settings')
 
-
+run_cnmf_btn = widgets.Button(
+	description='Run CNMF-E',
+	disabled=False,
+	button_style='info', # 'success', 'info', 'warning', 'danger' or ''
+	tooltip='Run CNMF-E',
+	layout=widgets.Layout(width="30%")
+)
 
 def run_cnmf_ui(_):
 	#get file
@@ -429,6 +653,33 @@ def show_cnmf_results_interface():
 	fig4.axes = [bqplot.Axis(scale=scale_x4, label='Time (Frame #)',grid_lines='none'), bqplot.Axis(scale=scale_y4, orientation='vertical',label='Amplitude',grid_lines='none')]
 	tb0 = Toolbar(figure=fig4)
 
+	#delete/refine ROIs control, and save data
+	delete_roi_btn = widgets.Button(
+		description='Delete ROI',
+		disabled=False,
+		button_style='warning', # 'success', 'info', 'warning', 'danger' or ''
+		tooltip='Exclude ROI'
+	)
+	delete_list_widget = widgets.SelectMultiple(
+		options=[],
+		value=[],
+		rows=3,
+		description='Exclud. ROIs',
+		disabled=False
+	)
+	download_btn = widgets.Button(
+		description='Download Data',
+		disabled=False,
+		button_style='info', # 'success', 'info', 'warning', 'danger' or ''
+		tooltip='Download fluorescence traces as CSV file'
+	)
+	dff_chk = widgets.Checkbox(
+		value=False,
+		description='Use dF/F',
+		disabled=False,
+		tooltip='Compute the delta F/F values',
+		layout=widgets.Layout(width="18%")
+	)
 	# deconv_chk = widgets.Checkbox(
 	# 	value=False,
 	# 	description='Deconvolution',
@@ -436,7 +687,14 @@ def show_cnmf_results_interface():
 	# 	tooltip='Show the results of deconvolution (if applicable)',
 	# 	layout=widgets.Layout(width="22%")
 	# )
-
+	deconv_chk = widgets.ToggleButtons(
+	    options=['Signal', 'Deconvolution', 'Both'],
+	    description='Plot options:',
+	    disabled=False,
+	    button_style='', # 'success', 'info', 'warning', 'danger' or ''
+	    tooltips=['Denoised/demixed Ca2+ signal', 'Deconvolved Ca2+ signal', 'Plot both'],
+		layout=widgets.Layout(width="18%"),
+	)
 	deconv_chk.observe(toggle_deconv)
 
 	def delete_roi_func(_):
@@ -513,6 +771,15 @@ def show_cnmf_results_interface():
 	return view_cnmf_widget
 
 
+view_cnmf_results_widget = widgets.Button(
+	description='View/Refine CNMF Results',
+	disabled=False,
+	button_style='info', # 'success', 'info', 'warning', 'danger' or ''
+	tooltip='View CNMF Results',
+	layout=widgets.Layout(width="30%")
+)
+
+
 def set_wkdir(_):
 	context.working_dir = workingdir_selector.value
 	print("Working Directory set to: {}".format(context.working_dir))
@@ -521,20 +788,17 @@ def set_wkdir(_):
 	file_selector.value = context.working_dir
 workingdir_btn.on_click(set_wkdir)
 
-view_results_col = widgets.VBox()
-view_results_tmp = widgets.VBox()
-view_results_col.children = [view_cnmf_results_widget, view_results_tmp]
+
 def view_results_(_):
 	#Yr_reshaped.reshape(np.prod(dims), T)
 	interface_edit = show_cnmf_results_interface()
 	#produce interface...
-	#display(interface_edit)
-	view_results_col.children = [view_cnmf_results_widget,interface_edit]
-
+	display(interface_edit)
 
 
 view_cnmf_results_widget.on_click(view_results_)
-
+view_results_col = widgets.VBox()
+view_results_col.children = [view_cnmf_results_widget]
 
 
 '''    mc_params = { #for processing individual movie at a time using MotionCorrect class object
@@ -556,10 +820,3 @@ view_cnmf_results_widget.on_click(view_results_)
 }'''
 from event_logic import *
 setup_context(context)
-
-app_ui = Tab()
-children = [wkdir_context_box,major_col,play_mov_btn_box,major_cnmf_col,view_results_col, set_event_widgets()]
-tab_titles = ['Main','Motion Correction','MC Results','CNMF-E', 'CNMF-E Results','Event Detection']
-app_ui.children = children
-for i in range(len(children)):
-    app_ui.set_title(i, str(tab_titles[i]))

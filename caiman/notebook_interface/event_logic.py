@@ -134,10 +134,14 @@ def compute_stats(signal, events, fr):
 def frames_to_time(a, fr=0.0333):
     return a * fr + fr
 
-def show_start_menu():
-    start_event_btn.on_click(show_plot)
-    settings_box = HBox([min_thresh_widget, min_ampl_widget, fr_widget])
-    display(VBox([settings_box,start_event_btn]))
+
+# def show_start_menu():
+#     start_event_btn.on_click(show_plot)
+#     settings_box = HBox([min_thresh_widget, min_ampl_widget, fr_widget])
+#     ret_box = VBox([settings_box,start_event_btn])
+#     return ret_box
+    #display(ret_box)
+
 
 def analyze_roi(signal):
     min_thresh = float(min_thresh_widget.value)
@@ -193,9 +197,17 @@ def convToDF(results):
     df = df[columns]
     return df
 
-def show_plot(_):
-    clear_output()
-    show_start_menu()
+#start_event_btn.on_click(show_plot)
+settings_box = HBox([min_thresh_widget, min_ampl_widget, fr_widget])
+results_area = HBox()
+ret_box = VBox([settings_box,start_event_btn,results_area])
+
+def set_event_widgets():
+    return ret_box
+
+def show_plot():
+    #clear_output()
+    #ret_box = show_start_menu()
     signal_data = setup_context(context)
     roi_slider_widget.max = signal_data.shape[0]
     #print(signal_data.shape)
@@ -207,6 +219,7 @@ def show_plot(_):
     #plt.scatter(x, y, c=['red'], alpha=0.9) #x is indices, y is signal value'
     # === === ===
     cur_roi = (roi_slider_widget.value - 1)
+    #print(df_results.head(n=25))
     signal = signal_data[cur_roi]
     #x_range, y_base, events_x, events_y, thresh_line_y, event_results = analyze_roi(signal)
     x_range, y_base, events_x, events_y, thresh_line_y, event_results = results[cur_roi]
@@ -235,7 +248,7 @@ def show_plot(_):
     tb0 = Toolbar(figure=fig)
 
     out = Output()
-    event_results_widget = qgrid.QgridWidget(df=df_results, show_toolbar=True)
+    event_results_widget = qgrid.QgridWidget(df=df_results, show_toolbar=True, grid_options={'autoHeight':False})
     def update_plot(change):
         cur_roi2 = (roi_slider_widget.value - 1)
         new_signal = signal_data[cur_roi2]
@@ -251,6 +264,8 @@ def show_plot(_):
         events_scat.y = events_y
         #event_results_widget.df = event_results
         indx_range = df_results.loc[df_results['ROI'] == (cur_roi2+1)].index.values.tolist()
+        if len(indx_range) == 0:
+            indx_range=[1,1]
         min_ind = indx_range[0]
         max_ind = indx_range[-1]
         event_results_widget._handle_qgrid_msg_helper({
@@ -262,15 +277,36 @@ def show_plot(_):
             'type': "slider"
         },
         'type': "filter_changed"
-    })
+        })
     def dl_events_click(_):
         event_results_widget.get_changed_df().to_csv(path_or_buf = context.working_dir + 'events_data.csv')
         print("Data saved to current working directory as: events_data.csv")
     dl_events_data_btn.on_click(dl_events_click)
 
+    def reset_filters(_):
+        event_results_widget._handle_qgrid_msg_helper({
+        'field': "index",
+        'filter_info': {
+            'field': "index",
+            'max': 9999,
+            'min': 0,
+            'type': "slider"
+        },
+        'type': "filter_changed"
+        })
+    show_all_events_btn.on_click(reset_filters)
+
     update_plot({'new':1})
     roi_slider_widget.observe(update_plot, names='value')
     fig_widget = VBox([HBox([VBox([roi_slider_widget,tb0,fig])])])
-    display(fig_widget,event_results_widget,dl_events_data_btn)
+    btns = HBox([show_all_events_btn,dl_events_data_btn])
+    figslist = VBox([fig_widget,event_results_widget,btns])
+    return figslist
+    #display(figslist)
     #display(df_results)
 #show_start_menu()
+def update_figs(_):
+    figslist = show_plot()
+    ret_box.children = [settings_box,start_event_btn,figslist]
+
+start_event_btn.on_click(update_figs)
