@@ -22,7 +22,7 @@ from caiman.mmapping import load_memmap
 from caiman.utils.visualization import inspect_correlation_pnr
 from caiman.components_evaluation import estimate_components_quality_auto
 from caiman.motion_correction import motion_correct_oneP_rigid,motion_correct_oneP_nonrigid
-from caiman.source_extraction.cnmf.utilities import detrend_df_f
+from caiman.source_extraction.cnmf.utilities import detrend_df_f, detrend_df_f_auto
 import scipy
 import pylab as pl
 import matplotlib as mpl

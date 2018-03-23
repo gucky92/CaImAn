@@ -12,7 +12,7 @@ roi_slider_widget = widgets.BoundedIntText(
     width=300
 )
 min_thresh_widget = widgets.BoundedFloatText(
-    value=1.025,
+    value=0.1,
     min=0.000,
     max=10.000,
     step=0.001,
@@ -21,12 +21,12 @@ min_thresh_widget = widgets.BoundedFloatText(
     readout=True,
     readout_format='.3f',
 )
-min_ampl_widget = widgets.BoundedFloatText(
-    value=0.015,
+min_dist_widget = widgets.BoundedFloatText(
+    value=50.0,
     min=0,
-    max=10.0,
+    max=100.0,
     step=0.001,
-    description='Min Amplitude:',
+    description='Min Dist:',
     disabled=False,
     readout=True,
     readout_format='.3f',

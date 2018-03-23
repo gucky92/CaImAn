@@ -30,6 +30,7 @@ from ...base.rois import com
 import pylab as pl
 import scipy
 from ...mmapping import parallel_dot_product
+from ...utils.stats import df_percentile
 
 
 #%%
@@ -159,8 +160,8 @@ def CNMFSetParms(Y, n_processes, K=30, gSig=[5, 5], gSiz=None, ssub=2, tsub=2, p
             whether to update the background components in the spatial phase
 
         low_rank_background:bool
-            whether to update the using a low rank approximation. In the False case all the nonzero elements of the background components are updated using hals    
-            (to be used with one background per patch) 
+            whether to update the using a low rank approximation. In the False case all the nonzero elements of the background components are updated using hals
+            (to be used with one background per patch)
 
         method_ls:'lasso_lars'
             'nnls_L0'. Nonnegative least square with L0 penalty
@@ -444,7 +445,7 @@ def detrend_df_f(A, b, C, f, YrA=None, quantileMin=8, frames_window=200, block_s
         temporal components (from cnmf cnm.C)
 
     f: ndarray
-        temporal background components    
+        temporal background components
 
     YrA: ndarray
         residual signals
@@ -491,6 +492,82 @@ def detrend_df_f(A, b, C, f, YrA=None, quantileMin=8, frames_window=200, block_s
         Df = scipy.ndimage.percentile_filter(
             B, quantileMin, (frames_window, 1))
         F_df = (F - Fd) / (Df + Fd)
+    return F_df
+
+#%%
+
+def detrend_df_f_auto(A, b, C, f, YrA=None, frames_window=1000, use_fast = False):
+
+    """
+    Compute DF/F using an automated level of percentile filtering based on
+    kernel density estimation.
+    Parameters:
+    -----------
+    A: scipy.sparse.csc_matrix
+        spatial components (from cnmf cnm.A)
+    b: ndarray
+        spatial backgrounds
+    C: ndarray
+        temporal components (from cnmf cnm.C)
+    f: ndarray
+        temporal background components
+    YrA: ndarray
+        residual signals
+    frames_window: int
+        number of frames for running quantile
+    use_fast: bool
+        flag for using fast approximate percentile filtering
+    Returns:
+    ----------
+    F_df:
+        the computed Calcium acitivty to the derivative of f
+    """
+    if 'csc_matrix' not in str(type(A)):
+        A = scipy.sparse.csc_matrix(A)
+    if 'array' not in str(type(b)):
+        b = b.toarray()
+    if 'array' not in str(type(C)):
+        C = C.toarray()
+    if 'array' not in str(type(f)):
+        f = f.toarray()
+
+    nA = np.sqrt(np.ravel(A.power(2).sum(axis=0)))
+    nA_mat = scipy.sparse.spdiags(nA, 0, nA.shape[0], nA.shape[0])
+    nA_inv_mat = scipy.sparse.spdiags(1. / nA, 0, nA.shape[0], nA.shape[0])
+    A = A * nA_inv_mat
+    C = nA_mat * C
+    if YrA is not None:
+        YrA = nA_mat * YrA
+
+    F = C + YrA if YrA is not None else C
+    B = A.T.dot(b).dot(f)
+    T = C.shape[-1]
+
+    data_prct, val = df_percentile(F[:frames_window], axis = 1)
+
+    if frames_window is None or frames_window > T:
+        Fd = np.stack([np.percentile(f, prctileMin) for f, prctileMin in
+              zip(F,data_prct)])
+        Df = np.stack([np.percentile(f, prctileMin) for f, prctileMin in
+              zip(B,data_prct)])
+        F_df = (F - Fd[:, None]) / (Df[:, None] + Fd[:, None])
+    else:
+        if use_fast:
+            Fd = np.stack([fast_prct_filt(f, level = prctileMin,
+                                          frames_window = frames_window) for
+                    f, prctileMin in zip(F,data_prct)])
+            Df = np.stack([fast_prct_filt(f, level = prctileMin,
+                                          frames_window = frames_window) for
+                    f, prctileMin in zip(B,data_prct)])
+        else:
+            Fd = np.stack([scipy.ndimage.percentile_filter(
+                            f, prctileMin, (frames_window)) for f, prctileMin in
+                            zip(F,data_prct)])
+            Df = np.stack([scipy.ndimage.percentile_filter(
+                            f, prctileMin, (frames_window)) for f, prctileMin in
+                            zip(B,data_prct)])
+        F_df = (F - Fd) / (Df + Fd)
+
     return F_df
 
 #%%
@@ -665,7 +742,7 @@ def update_order(A, new_a=None, prev_list=None):
      new_a: sparse array
           spatial component that is added, in order to efficiently update the orders in online scenarios
      prev_list: list of list
-          orders from previous iteration, you need to pass if new_a is not None 
+          orders from previous iteration, you need to pass if new_a is not None
 
      Outputs:
      ---------
@@ -816,15 +893,15 @@ def update_order_greedy(A, flag_AA=True):
 def compute_residuals(Yr_mmap_file, A_, b_, C_, f_, dview=None, block_size=1000, num_blocks_per_run=5):
     '''compute residuals from memory mapped file and output of CNMF
         Params:
-        -------            
-        A_,b_,C_,f_: 
+        -------
+        A_,b_,C_,f_:
                 from CNMF
 
         block_size: int
             number of pixels processed together
 
         num_blocks_per_run: int
-            nnumber of parallel blocks processes 
+            nnumber of parallel blocks processes
 
         Return:
         -------
@@ -858,7 +935,7 @@ def normalize_AC(A, C, YrA, b, f):
     """ Normalize to unit norm A and b
     Parameters:
     ----------
-    A,C,Yr,b,f: 
+    A,C,Yr,b,f:
         outputs of CNMF
     """
     if 'sparse' in str(type(A)):

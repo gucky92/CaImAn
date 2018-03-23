@@ -111,7 +111,7 @@ run_mc_btn.on_click(run_mc_ui)
 major_col = widgets.VBox()
 major_col.children = [file_box,is_batch_widget,settings, run_mc_btn]
 
-
+#for after motion correction
 def show_movies(_):
 	# play motion corrected movies
 	# orig_mov_widget = widgets.HTML(
@@ -141,7 +141,7 @@ def show_movies(_):
 	#orig_mov.play()
 	#mc_mov.play()
 
-
+#after motion correction
 play_mov_btn.on_click(show_movies)
 play_mov_btn_box = widgets.HBox()
 play_mov_btn_box.children = [play_mov_btn]
@@ -461,6 +461,7 @@ def show_cnmf_results_interface():
 
 
 #def detrend_df_f(A, b, C, f, YrA = None, quantileMin=8, frames_window=200, block_size=400):
+#def detrend_df_f_auto(A, b, C, f, YrA=None, frames_window=1000, use_fast = False):
 	def download_data_func(_):
 		#traces = np.delete(C, delete_list_widget.value, axis=0)
 		#traces = ma.masked_array(C, mask=delete_list_widget.value)
@@ -475,10 +476,11 @@ def show_cnmf_results_interface():
 		def save_traces():
 			if dff_chk.value == True:
 				#adj_c = detrend_df_f(A, b, C, f, YrA = YrA.T)
-				adj_c = detrend_df_f(A, b, C, f)
-				metadata_ += '_dFF'
+				#adj_c = detrend_df_f(A, b, C, f)
+				adj_c = detrend_df_f_auto(A, b, C, f)
+				#metadata_ += '_dFF'
 				print("Using dF/F values")
-			traces_path = workingdir_selector.value + 'traces_' + metadata_ + '.csv'
+			traces_path = workingdir_selector.value + 'traces_' + metadata_ + '_dFF' + '.csv'
 
 			df = pd.DataFrame(data=adj_c)
 			df.index += 1
@@ -540,6 +542,47 @@ workingdir_btn.on_click(set_wkdir)
 view_results_col = widgets.VBox()
 view_results_tmp = widgets.VBox()
 view_results_col.children = [view_cnmf_results_widget, view_results_tmp]
+
+###### Validation Column #######
+validate_col = widgets.VBox()
+
+def getYrDT():
+	if len(context.YrDT) == 0:
+		Yr, dims, T = load_memmap(os.path.join(os.path.split(context.working_cnmf_file)[0],filename))
+	else:
+		Yr, dims, T = context.YrDT
+
+	return Yr, dims, T
+
+def view_cnmf_mov_click(_):
+	A, C, b, f, YrA, sn, idx_components, conv = context.cnmf_results
+	Yr, dims, T = getYrDT()
+	mag_val = validate_col_mag_slider.value
+	cm.movie(np.reshape(A.tocsc()[:, idx_components].dot(
+    C[idx_components]), dims + (-1,), order='F').transpose(2, 0, 1)).play(magnification=mag_val, gain=10.)
+
+def view_bgmov_click(_):
+	Yr, dims, T = getYrDT()
+	Y = Yr.T.reshape((T,) + dims, order='F')
+	A, C, b, f, YrA, sn, idx_components, conv = context.cnmf_results
+	mag_val = validate_col_mag_slider.value
+	cm.movie(np.reshape(b.dot(f), dims + (-1,),
+                    order='F').transpose(2, 0, 1)).play(magnification=mag_val, gain=1.)#magnification=3, gain=1.
+
+def view_residual_click(_):
+	A, C, b, f, YrA, sn, idx_components, conv = context.cnmf_results
+	Yr, dims, T = getYrDT()
+	Y = Yr.T.reshape((T,) + dims, order='F')
+	mag_val = validate_col_mag_slider.value
+	cm.movie(np.array(Y) - np.reshape(A.tocsc()[:, :].dot(C[:]) + b.dot(
+    f), dims + (-1,), order='F').transpose(2, 0, 1)).play(magnification=mag_val, gain=10., fr=10) #magnification=3, gain=10., fr=10
+
+validate_col_cnmf_mov_btn.on_click(view_cnmf_mov_click)
+validate_col_bgmov_btn.on_click(view_bgmov_click)
+validate_col_residual_btn.on_click(view_residual_click)
+validate_col.children = [validate_col_mag_slider, validate_col_cnmf_mov_btn, \
+validate_col_bgmov_btn, validate_col_residual_btn]
+
 def view_results_(_):
 	#Yr_reshaped.reshape(np.prod(dims), T)
 	interface_edit = show_cnmf_results_interface()
@@ -570,12 +613,12 @@ view_cnmf_results_widget.on_click(view_results_)
 	'gSig_filt' : [int(x) for x in gSigFilter.value.split(',')] #default 9,9  best 6,6,
 	'dsfactors': None #or (1,1,1)   (ds x, ds y, ds t)
 }'''
-from event_logic import *
+from event_logic_v2 import *
 setup_context(context)
 
 app_ui = Tab()
-children = [wkdir_context_box,major_col,play_mov_btn_box,major_cnmf_col,view_results_col, set_event_widgets()]
-tab_titles = ['Main','Motion Correction','MC Results','CNMF-E', 'CNMF-E Results','Event Detection']
+children = [wkdir_context_box,major_col,play_mov_btn_box,major_cnmf_col,view_results_col, validate_col, set_event_widgets()]
+tab_titles = ['Main','Motion Correction','MC Results','CNMF-E', 'CNMF-E Results','CNMF Validation', 'Event Detection']
 app_ui.children = children
 for i in range(len(children)):
     app_ui.set_title(i, str(tab_titles[i]))

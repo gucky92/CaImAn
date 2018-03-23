@@ -337,5 +337,47 @@ view_cnmf_results_widget = widgets.Button(
 	layout=widgets.Layout(width="30%")
 )
 
+##### Validation Tab: ######
+############################
+
+validate_col_mag_slider = widgets.IntSlider(
+	value=2,
+	min=1,
+	max=10,
+	step=1,
+	description='Movie Magnification:',
+	disabled=False,
+	continuous_update=False,
+	orientation='horizontal',
+	readout=True,
+	readout_format='d',
+	tooltip='How much to magnify the movie',
+	layout=widgets.Layout(width="30%")
+)
+
+validate_col_cnmf_mov_btn = widgets.Button(
+	description='View CNMF-E Analyzed Movie',
+	disabled=False,
+	button_style='info', # 'success', 'info', 'warning', 'danger' or ''
+	tooltip='View Background Movie',
+	layout=widgets.Layout(width="30%")
+)
+
+validate_col_bgmov_btn = widgets.Button(
+	description='View Background Movie',
+	disabled=False,
+	button_style='info', # 'success', 'info', 'warning', 'danger' or ''
+	tooltip='View Background Movie',
+	layout=widgets.Layout(width="30%")
+)
+
+validate_col_residual_btn = widgets.Button(
+	description='View Residual Movie',
+	disabled=False,
+	button_style='info', # 'success', 'info', 'warning', 'danger' or ''
+	tooltip='View Residual Movie',
+	layout=widgets.Layout(width="30%")
+)
+
 
 #####
