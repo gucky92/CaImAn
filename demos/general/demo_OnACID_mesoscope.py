@@ -8,28 +8,15 @@ Special thanks to Andreas Tolias and his lab at Baylor College of Medicine
 for sharing their data used in this demo.
 """
 
-import os
-import sys
-
-# This is code to detect where CaImAn was installed and modify the import path to suit.
-try:
-    __file__ # Normal python sets this, many python IDEs do not
-    # Next, step back from this demo to the caiman dir
-    caiman_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "..")
-except NameError:
-    if "demos" in os.getcwd(): # We assume we're in demos/general or demos/notebooks
-        caiman_path = os.path.join(os.getcwd(), "..", "..") # Step back to caiman dir
-    else: # Assume we're in the Caiman dir
-        if os.path.isfile(os.path.join("caiman", "__init__.py")):
-            caiman_path = "."
-        else:
-            print("Could not find the caiman install")
-            sys.exit(37)
-    
-print("Caiman path detected as " + caiman_path)
-sys.path.append(caiman_path)
-
+from copy import deepcopy
+import glob
 import numpy as np
+import os
+import pylab as pl
+import scipy
+import sys
+from time import time
+
 try:
     if __IPYTHON__:
         print('Detected iPython')
@@ -39,20 +26,16 @@ try:
 except NameError:
     pass
 
-from time import time
 import caiman as cm
 from caiman.utils.visualization import view_patches_bar
 from caiman.utils.utils import download_demo, load_object, save_object
 from caiman.components_evaluation import evaluate_components_CNN
-import pylab as pl
-import scipy
 from caiman.motion_correction import motion_correct_iteration_fast
 import cv2
 from caiman.utils.visualization import plot_contours
-import glob
 from caiman.source_extraction.cnmf.online_cnmf import bare_initialization
 from caiman.source_extraction.cnmf.utilities import detrend_df_f_auto
-from copy import deepcopy
+from caiman.paths import caiman_datadir
 
 #%%  download and list all files to be processed
 
@@ -63,7 +46,7 @@ download_demo('Tolias_mesoscope_2.hdf5', fld_name)
 download_demo('Tolias_mesoscope_3.hdf5', fld_name)
 
 # folder where files are located
-folder_name = os.path.join(caiman_path, 'example_movies', fld_name)
+folder_name = os.path.join(caiman_datadir(), 'example_movies', fld_name)
 extension = 'hdf5'                                  # extension of files
 # read all files to be processed
 fls = glob.glob(folder_name + '/*' + extension)
@@ -239,7 +222,7 @@ path_to_cnn_residual = 'use_cases/edge-cutter/sniper_sensitive.h5'
 cnm2._prepare_object(np.asarray(Yr), T1, expected_comps, idx_components=None,
                          min_num_trial=3, max_num_added = 3, N_samples_exceptionality=int(N_samples),
                          path_to_model = path_to_cnn_residual,
-                         sniper_mode = False, use_peak_max=False)
+                         sniper_mode = False, use_peak_max=False, q=0.5)
 cnm2.thresh_CNN_noisy = 0.5
 
 #%% Run OnACID and optionally plot results in real time
@@ -256,7 +239,7 @@ rm_thr = 0.1  # CNN classifier removal threshold
 # flag for plotting contours of detected components at the end of each file
 plot_contours_flag = False
 # flag for showing results video online (turn off flags for improving speed)
-play_reconstr = False
+play_reconstr = True
 # flag for saving movie (file could be quite large..)
 save_movie = False
 movie_name = os.path.join(folder_name, 'sniper_meso_0.995_new.avi')  # name of movie to be saved
