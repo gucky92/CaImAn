@@ -30,13 +30,13 @@ def setup_context(context):
 def detect_events(signal, base_shifted, thresh=0.1, min_dist=50):
     # list of events, each event is itself a list of the form
     # start (index), peak value, peak index, end (index); need to convert indices to time later
-    events: List = [] #[start index, peak index, end index]
+    events = [] #[start index, peak index, end index]
     #main loop
     in_event = False
-    cur_event: List = [None, None, None] #start index, peak index, end index
+    cur_event = [None, None, None] #start index, peak index, end index
     #params
     lag = 5 #used to compute average of window around baseline pt
-    indexes = peakutils.indexes(signal, thres=0.1, min_dist=50) #finds peak indices
+    indexes = peakutils.indexes(signal, thres=thresh, min_dist=50) #finds peak indices
     for peak in indexes:
         #first find left bound, then right bound
         start = peak
@@ -44,9 +44,15 @@ def detect_events(signal, base_shifted, thresh=0.1, min_dist=50):
             if signal[i] <= np.mean(base_shifted[(i-lag):(i+lag)]):
                 start = i
                 break;
+            if (peak - i) > 166:
+                start = i
+                break;
         end = peak
         for j in range(peak,len(signal),1):
             if signal[j] <= np.mean(base_shifted[(j-lag):(j+lag)]):
+                end = j
+                break;
+            if (j - peak) > 166:
                 end = j
                 break;
         event = [start, peak, end]
@@ -97,9 +103,9 @@ def frames_to_time(a, fr=0.0333):
 def analyze_roi(signal, min_thresh, min_dist, fr):
     ####
     #def detect_events(signal, base_shifted, thresh=0.1, min_dist=50):
-    base = peakutils.baseline(signal,12) #Fit polynomial baseline to each signal
-    shift_amt = 5.0
-    base_shifted = base + shift_amt*(np.abs(np.mean(base)))
+    base = peakutils.baseline(signal, 12) #Fit polynomial baseline to each signal
+    shift_amt = 0.05 * np.max(signal)
+    base_shifted = base + shift_amt
 
     events = detect_events(signal, base_shifted, min_thresh, min_dist) #list of lists of start, peak, end indices
     event_results = compute_stats(signal, events, fr)
@@ -173,7 +179,10 @@ def show_plot():
     bump = np.max(signal) * bump_perc
     x_range = np.arange(0,frames_to_time(len(signal)), step=fr)
         #plt.plot(x_range,y_thresh)
-    thresh_line_y = np.repeat(min_thresh,len(signal))
+
+    thresh = min_thresh * np.max(signal)
+    #thresh_line_y = np.repeat(min_thresh,len(signal))
+    thresh_line_y = np.repeat(thresh,len(signal))
 
     ##### Analyze all Signal Data for Events
     results = analyze_all(signal_data, min_thresh, min_dist, fr)
@@ -220,14 +229,17 @@ def show_plot():
         new_signal = signal_data[cur_roi2]
         bump = np.max(new_signal) * bump_perc
         #x_range, y_base, events_x, events_y, thresh_line_y, event_results = analyze_roi(new_signal)
-        events, event_results, base = results[cur_roi]
+        events, event_results, base2 = results[cur_roi2]
         start_pts_x, start_pts_y, peaks_x, peaks_y, end_pts_x, end_pts_y = get_event_pts(new_signal, events)
+        thresh = min_thresh * np.max(new_signal)
+        thresh_line_y = np.repeat(thresh,len(new_signal))
+
         sig_line.y = new_signal
         sig_line.x = x_range
         thresh_line.x = x_range
         thresh_line.y = thresh_line_y
         base_line.x = x_range
-        base_line.y = base
+        base_line.y = base2
         start_pts_scat.x = start_pts_x
         start_pts_scat.y = start_pts_y
         peaks_scat.x = peaks_x

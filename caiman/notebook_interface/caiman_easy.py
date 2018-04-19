@@ -171,6 +171,14 @@ def load_files(fldr, print_values=False):
 				print(each_file)
 		return files
 
+#Normalize signal trace to be in range [0,1]
+def normalize_signal(signal):
+	#signal should be flat array, e.g. shape=(2000,)
+	signal_copy = signal.copy()
+	signal_copy = signal_copy + np.abs(signal_copy.min())  #make all values positive
+	signal_copy = signal_copy / signal_copy.max() #normalize so max value is 1
+	return signal_copy
+
 #run motion correction
 def run_mc(fnames, mc_params, dsfactors, rigid=True, batch=True):
 	min_mov = 0
@@ -260,7 +268,7 @@ def run_mc(fnames, mc_params, dsfactors, rigid=True, batch=True):
 def flatten(l):
 	return [item for sublist in l for item in sublist]
 
-def combine_mc_mmaps(mc_list : List, dview):
+def combine_mc_mmaps(mc_list, dview):
 	mc_names = [i.fname_tot_rig for i in mc_list]
 	mc_names = flatten(mc_names)
 	mc_mov_name = save_memmap_join(mc_names, base_name='mc_rig', dview=dview)
@@ -280,7 +288,7 @@ def resize_mov(Yr, fx=0.521, fy=0.3325):
 def clean_up_files():
 	pass
 
-def cnmf_run(fname: str, cnmf_params: Dict): #fname is a full path, mmap file
+def cnmf_run(fname, cnmf_params): #fname is a full path, mmap file
 	#SETTINGS
 	#gSig = 4   # gaussian width of a 2D gaussian kernel, which approximates a neuron
 	#gSiz = 12  # average diameter of a neuron
@@ -298,12 +306,15 @@ def cnmf_run(fname: str, cnmf_params: Dict): #fname is a full path, mmap file
 	A, C, b, f, YrA, sn, conv = cnm.A, cnm.C, cnm.b, cnm.f, cnm.YrA, cnm.sn, cnm.S
 	print("(Sparse) Mem Size A: {0}, Mem Size C: {1}".format(getsizeof(A), getsizeof(C)))
 	print("(Dense) Mem Size A: {0}, Mem Size C: {1}".format(np.asarray(A).nbytes, np.asarray(A).nbytes))
+	#Let's normalize the Ca2+ signal traces
+	for i in range(C.shape[0]): #for each trace
+		C[i] = normalize_signal(C[i])
 	idx_components = np.arange(A.shape[-1])
 	clean_up() #remove log files
 	return A, C, b, f, YrA, sn, idx_components, conv
 
 
-def plot_contours(YrDT: Tuple, cnmf_results: Tuple, cn_filter):
+def plot_contours(YrDT, cnmf_results, cn_filter):
 	Yr, dims, T = YrDT
 	Yr = np.rollaxis(np.reshape(Yr, dims + (T,), order='F'), 2)
 	A, C, b, f, YrA, sn, idx_components, conv = cnmf_results
@@ -318,7 +329,7 @@ def plot_contours(YrDT: Tuple, cnmf_results: Tuple, cn_filter):
 		YrA, coo_matrix(A.tocsc()[:, idx_components]), C[idx_components],
 		b, f, dims[0], dims[1], YrA=YrA[idx_components], img=cn_filter)
 
-def filter_rois(YrDT: Tuple, cnmf_results: Tuple, dview, gSig, gSiz):
+def filter_rois(YrDT, cnmf_results, dview, gSig, gSiz):
 	Yr, dims, T = YrDT
 	A, C, b, f, YrA, sn, idx_components_orig, conv = cnmf_results
 	final_frate = 20# approx final rate  (after eventual downsampling )
@@ -358,7 +369,7 @@ def filter_rois(YrDT: Tuple, cnmf_results: Tuple, dview, gSig, gSiz):
 	return idx_components, idx_components_bad
 
 
-def corr_img(Yr: np.ndarray, gSig: int, center_psf :bool, plot=True):
+def corr_img(Yr, gSig, center_psf, plot=True):
 	# show correlation image of the raw data; show correlation image and PNR image of the filtered data
 	cn_raw = cm.summary_images.max_correlation_image(Yr, swap_dim=False, bin_size=3000) #default 3000
 	#%% TAKES MEMORY!!!

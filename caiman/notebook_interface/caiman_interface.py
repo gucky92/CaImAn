@@ -378,7 +378,7 @@ def show_cnmf_results_interface():
 
 	def get_signal(index, deconv=False):
 		if not deconv:
-			return C[index], None
+			return C[index], np.repeat(0,len(C[index]))
 		else:
 			return C[index], conv[index]
 
@@ -423,8 +423,10 @@ def show_cnmf_results_interface():
 	scale_x4 = bqplot.LinearScale(min=0.0, max=C.shape[1])
 	if conv is not None:
 		scale_x5 = bqplot.LinearScale(min=0.0, max=conv.shape[1])
+	else:
+		scale_x5 = bqplot.LinearScale(min=0.0, max=C.shape[1])
 	deconv = True if conv is not None else False
-	init_signal = get_signal(roi_slider.value, deconv) #returns tuple (C, S) if deconv is True, else returns (C, None)
+	init_signal = get_signal(roi_slider.value, deconv) #returns tuple (C, S) if deconv is True, else returns (C, np.arange(0,len(C)))
 	init_signal_max = init_signal[0].max()
 	#Deconvolved signal (if applicable)
 	init_deconv_signal_max = 0

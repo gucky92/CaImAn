@@ -22,7 +22,7 @@ ext_modules = [Extension("caiman.source_extraction.cnmf.oasis",
 
 setup(
     name='caiman',
-    version='1.0',
+    version='1.0.0',
     author='Andrea Giovannucci, Eftychios Pnevmatikakis, Johannes Friedrich, Valentina Staneva, Ben Deverett, Erick Cobos, Jeremie Kalfon',
     author_email='agiovannucci@flatironinstitute.org',
     url='https://github.com/simonsfoundation/CaImAn',
