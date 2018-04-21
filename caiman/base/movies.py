@@ -1166,20 +1166,20 @@ def load(file_name,fr=30,start_time=0,meta_data=None,subindices=None,shape=None,
     Exception('File not found!')
     """
     # case we load movie from file
-    if type(file_name) is list:
+    if not isinstance(file_name, str) and hasattr(file_name, '__iter__'):
         if shape is not None:
             raise Exception('shape not supported for multiple movie input')
-            
+
         return load_movie_chain(file_name,fr=fr, start_time=start_time,
                      meta_data=meta_data, subindices=subindices,
                      bottom=bottom, top=top, left=left, right=right, channel = channel)
-        
+
     if bottom != 0:
         raise Exception('top bottom etc... not supported for single movie input')
 
     if channel is not None:
         raise Exception('channel not supported for single movie input')
-        
+
     if os.path.exists(file_name):
         _, extension = os.path.splitext(file_name)[:2]
 
@@ -1368,7 +1368,7 @@ def load_movie_chain(file_list, fr=30, start_time=0,
 
     bottom, top, left, right, z_top, z_bottom : int
         to load only portion of the field of view
-    
+
     is3D : bool
         flag for 3d data (adds a fourth dimension)
 
@@ -1390,16 +1390,16 @@ def load_movie_chain(file_list, fr=30, start_time=0,
         if not is3D:
             if m.ndim == 2:
                 m = m[np.newaxis, :, :]
-    
+
             _, h, w = np.shape(m)
             m = m[:, top:h - bottom, left:w - right]
         else:
             if m.ndim == 3:
                 m = m[np.newaxis, :, :, :]
-            
+
             _, h, w, d = np.shape(m)
             m = m[:, top:h - bottom, left:w - right, z_top:d - z_bottom]
-                
+
         mov.append(m)
     return ts.concatenate(mov, axis=0)
 
