@@ -149,7 +149,7 @@ class MotionCorrect(object):
         """
         if type(fname) is not list:
             fname = [fname]
-            
+
         self.fname=fname
         self.dview=dview
         self.max_shifts=max_shifts
@@ -342,7 +342,7 @@ class MotionCorrect(object):
             dims = Y.shape[1:]
             x_grid, y_grid = np.meshgrid(np.arange(0., dims[0]).astype(
                 np.float32), np.arange(0., dims[1]).astype(np.float32))
-            m_reg = [cv2.remap(img, -cv2.resize(shiftY, dims) + x_grid, 
+            m_reg = [cv2.remap(img, -cv2.resize(shiftY, dims) + x_grid,
                                -cv2.resize(shiftX, dims) + y_grid, cv2.INTER_CUBIC)
                      for img, shiftX, shiftY in zip(Y, shifts_x, shifts_y)]
 
@@ -2549,14 +2549,12 @@ def tile_and_correct_wrapper(params):
         imgs = cm.base.movies.sbxread(name, idxs[0], len(idxs))
         mc = np.zeros(imgs.shape, dtype=np.float32)
         shift_info = []
-    elif extension == '.hdf5':
+    elif extension in ['.hdf5', '.h5', '.npy']:
         imgs = cm.load(img_name, subindices=list(idxs))
         mc = np.zeros(imgs.shape, dtype=np.float32)
         shift_info = []
-    elif extension == '.h5':
-        imgs = cm.load(img_name, subindices=list(idxs))
-        mc = np.zeros(imgs.shape, dtype=np.float32)
-        shift_info = []
+    else:
+        raise NameError('Extension {} not supported'.format(extension))
     for count, img in enumerate(imgs):
         if count % 10 == 0:
             print(count)
@@ -2611,7 +2609,8 @@ def motion_correction_piecewise(fname, splits, strides, overlaps, add_to_movie=0
         T = shape[2]
 
     elif extension == '.npy':
-        raise Exception('Numpy not supported at the moment')
+        T, d1, d2 = np.load(fname, mmap_mode='r').shape
+        #raise Exception('Numpy not supported at the moment')
 
     elif extension == '.hdf5':
         with h5py.File(fname) as fl:
