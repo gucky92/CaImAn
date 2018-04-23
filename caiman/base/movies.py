@@ -30,7 +30,7 @@ import scipy
 import sklearn
 import warnings
 import numpy as np
-from sklearn.decomposition import NMF, incremental_pca, FastICA
+from sklearn.decomposition import NMF, incremental_pca, FastICA, IncrementalPCA
 
 from sklearn.cluster import KMeans
 from sklearn.metrics.pairwise import euclidean_distances
@@ -624,7 +624,7 @@ class movie(ts.timeseries):
         frame_samples = np.reshape(self, (num_frames, frame_size)).T
 
         # run IPCA to approxiate the SVD
-        ipca_f = incremental_pca(n_components=components, batch_size=batch)
+        ipca_f = IncrementalPCA(n_components=components, batch_size=batch)
         ipca_f.fit(frame_samples)
 
         # construct the reduced version of the movie vectors using only the
