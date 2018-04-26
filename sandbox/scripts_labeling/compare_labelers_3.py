@@ -1,4 +1,4 @@
-#!/usr/bin/env python2
+#!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
 Created on Mon Apr 24 09:54:35 2017
@@ -28,8 +28,8 @@ try:
         get_ipython().magic('load_ext autoreload')
         get_ipython().magic('autoreload 2')
 except NameError:
-    print('Not IPYTHON')
-    pass
+    print('Not launched under iPython')
+
 from caiman.base.rois import nf_read_roi_zip
 import os
 import numpy as np
@@ -75,7 +75,7 @@ font = {'family': 'Myriad Pro',
         'size': 10}
 pl.rc('font', **font)
 
-for folder_out in folders_out[10:]:
+for folder_out in folders_out[:]:
     projection_img_median = folder_out + '/projections/median_projection.tif'
     projection_img_correlation = folder_out + '/projections/correlation_image.tif'
     folder_in = folder_out + '/regions'
@@ -118,7 +118,7 @@ for folder_out in folders_out:
     projection_img_correlation = folder_out + '/projections/correlation_image.tif'
     folder_in = folder_out + '/regions'
     print('********' + folder_out)
-    with np.load(folder_in + '/comparison_labelers_consensus.npz') as ld:
+    with np.load(folder_in + '/comparison_labelers_consensus.npz', encoding='latin1') as ld:
         pf = ld['performance_all'][()]
         for key in pf:
             if pf[key]['f1_score'] <= 1:

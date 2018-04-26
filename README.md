@@ -28,6 +28,7 @@ Recent advances in calcium imaging acquisition techniques are creating datasets 
     * Fast parallelizable OpenCV and FFT-based motion correction of large movies
     * Can be run also in online mode (i.e. one frame at a time)
     * Corrects for non-rigid artifacts due to raster scanning or non-uniform brain motion
+    * FFTs can be computed on GPUs (experimental). Requires pycuda and skcuda to be installed.
 
 * **Source extraction** 
 
@@ -51,32 +52,32 @@ Recent advances in calcium imaging acquisition techniques are creating datasets 
 
 ## New: Online analysis
 
-We recently incorporated a Python implementation of the OnACID [[5]](#onacid) algorithm, that enables processing data in an online mode and in real time. Check the script ```demos_detailed/demo_OnACID_mesoscope.py``` or the notebook ```demo_OnACID_mesoscope.ipynb``` for an application on two-photon mesoscope data provided by the Tolias lab (Baylor College of Medicine).
+We recently incorporated a Python implementation of the OnACID [[5]](#onacid) algorithm, that enables processing data in an online mode and in real time. Check the script ```demos/general/demo_OnACID_mesoscope.py``` or the notebook ```demos/notebooks/demo_OnACID_mesoscope.ipynb``` for an application on two-photon mesoscope data provided by the Tolias lab (Baylor College of Medicine).
 
 ## Installation for calcium imaging data analysis
 
 
-* Installation on Mac (**Suggested PYTHON 3.5**)
+* Installation on Mac
 
-   * Download and install Anaconda (Python 2.7 or Python 3.5) <http://docs.continuum.io/anaconda/install>
+   * Download and install Anaconda (Python 2.7 or Python 3.6) <http://docs.continuum.io/anaconda/install>
+     If you wish to use Python 2.7, please use environment_python2.yml instead of environment.yml
 
     ```bash
    
    git clone https://github.com/flatironinstitute/CaImAn
    cd CaImAn/
-   conda env create -f environment_mac.yml -n caiman
+   conda env create -f environment.yml -n caiman
    source activate caiman
-   (ONLY FOR PYTHON 2) conda install numpy==1.12  
-   (ONLY FOR PYTHON 2) conda install spyder=3.1
-   conda install -c conda-forge tensorflow keras
-   python setup.py build_ext -i   
+   pip install . (OR pip install -e . if you want to develop code')
    ```
-   **Some possible issues** when running in parallel mode (dview is not None) because of bugs in Python/ipyparallel/numpy interaction, sometimes CaImAn hangs. In this case, we suggest to use dview = None. In the near future this should be solved, and currently the dev branch solves the issue (you need to recreate the environment using the instructions in the dev README).  
-
+   
+   
+   **Python 3 may have issues** when running in parallel mode (dview is not None) because of bugs in Python/ipyparallel/numpy interaction. Python2 may have fewer issues
 
 * Installation on Linux 
 
-   * Download and install Anaconda (Python 2.7 or Python 3.5) <http://docs.continuum.io/anaconda/install>
+   * Download and install Anaconda (Python 2.7 or Python 3.6) <http://docs.continuum.io/anaconda/install>
+     If you wish to use Python 2.7, please use environment_python2.yml instead of environment.yml
 
    ```bash
    
@@ -84,20 +85,18 @@ We recently incorporated a Python implementation of the OnACID [[5]](#onacid) al
    cd CaImAn/
    conda env create -f environment.yml -n caiman
    source activate caiman   
-   (ONLY FOR PYTHON 2) conda install spyder=3.1
-   python setup.py build_ext -i   
+   pip install . (OR pip install -e . if you want to develop code)
    ```
 
 
-   * To make the package available from everywhere and have it working *efficiently* under any configuration ALWAYS run these lines before starting spyder:
+   * To make the package available from everywhere and have it working *efficiently* under any configuration ALWAYS run these commands before starting spyder:
 
    ```bash
-   export PYTHONPATH="/path/to/caiman:$PYTHONPATH"
    export MKL_NUM_THREADS=1
    export OPENBLAS_NUM_THREADS=1
    ```
 
-* Installation on  Windows 
+* Installation on Windows 
 
   (Python 3)
 
@@ -116,19 +115,37 @@ We recently incorporated a Python implementation of the OnACID [[5]](#onacid) al
 	
 	```bash
     
-	conda env create -f environment_mac.yml -n caiman
+	conda env create -f environment.yml -n caiman
     activate caiman   
-    conda install -c conda-forge tensorflow keras
-    python setup.py build_ext -i       
+    pip install . (OR pip install -e . if you want to develop code)
 	conda install numba
 	jupyter notebook --NotebookApp.iopub_data_rate_limit=1.0e10
     ```
 
+  (Python 2.7) not supported on Windows
+    ```
+    git clone  https://github.com/flatironinstitute/CaImAn
+    cd CaImAn
+    git pull
+    conda env create -f environment_python2.yml -n caiman
+    activate caiman   
+    pip install . (OR pip install -e . if you want to develop code)
+    ```
 
-  (Python 2.7) not supported in Windows
-    
+** caimanmanager
+  Once CaImAn is installed, you may want to get a working directory with code samples and datasets; pip installed a caimanmanager.py command
+  that manages this. If you have not installed Caiman before, you can do "caimanmanager.py install" (o "caimanmanager.py install --inplace" is you used "pip install -e .") and it will place that directory under
+  your home directory in a directory called caiman_data. If you have, some of the demos or datafiles may have changed since your last install,
+  to follow API changes. You can check to see if they have by doing "caimanmanager.py check". If they have not, you may keep using them. If they have,
+  we recommend moving your old caiman data directory out of the way (or just remove them if you have no precious data) and doing
+  a new data install as per above.
 
- 
+  If you prefer to manage this information somewhere else, the CAIMAN_DATA environment variable can be set to customise it. The caimanmanager tool
+  and other libraries will respect that.
+
+Alternative environments:
+   * [Using experimental CUDA support](/README-cuda.md)
+
 ### Installation for behavioral analysis
 * Installation on Linux (Windows and MacOS are problematic with anaconda at the moment)
    * create a new environment (suggested for safety) and follow the instructions for the calcium imaging installation
@@ -141,22 +158,24 @@ We recently incorporated a Python implementation of the OnACID [[5]](#onacid) al
 
    * you can find them in directly in CaImAn folder and launch them from your ipython Notebook application:
    
-   * to launch jupyter notebook :
+   * to launch one of the jupyter notebooks:
    
        ```bash
     
         source activate CaImAn
         conda launch jupyter
         (if errors on plotting use this instead) jupyter notebook --NotebookApp.iopub_data_rate_limit=1.0e10
+	(select the notebook from within Jupyter's browser)
     
        ```
-* demo files are also found in the demos_detailed subfolder. We suggest trying demo_pipeline.py first as it contains most of the tasks required by calcium imaging. For behavior use demo_behavior.py
+* demo files are also found in the demos/general subfolder. We suggest trying demo_pipeline.py first as it contains most of the tasks required by calcium imaging. For behavior use demo_behavior.py
    
   * /!\ if you want to directly launch the python files, your python console still must be in the CaImAn directory. 
 
 ## Testing
 
-* All diffs must be tested before asking for a pull request. Call 'nosetests' program from inside of your CaImAn folder to look for errors. 
+* All diffs must be tested before asking for a pull request. Call 'caimanmanager.py test' from outside of your CaImAn folder to look for errors (you need to pass the path to the caimanmanager.py file is you are ng in place).
+* You can test all the demo files running 
    For python3 on MacOS nosetests does not work properly. If you need to test, then type the following from within the CaImAn folder:
 ```bash
 cd caiman/tests
@@ -165,7 +184,7 @@ ls test_*py | while read t; do nosetests --nologcapture ${t%%.py}; done;
 
   ### general_test
 
-   * This test will run the entire CaImAn program and look for differences against the original one. If your changes have made significant differences you'll be able to be recognise regressions by this test.  
+   * This test will run tests on the CaImAn software and look for output differences against the original. If your changes have made significant differences you'll be able to be recognise regressions by this test.  
    
    
 # Contributors:

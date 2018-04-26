@@ -1,13 +1,14 @@
+#!/usr/bin/env python
 # -*- coding: utf-8 -*-
-""" functions related to the creation and management of the cluster
 
-This file contains
+""" functions related to the creation and management of the cluster
 
 We put arrays on disk as raw bytes, extending along the first dimension.
 Alongside each array x we ensure the value x.dtype which stores the data type.
 
 @author andrea giovannucci
 """
+
 # \package caiman
 # \version   1.0
 # \copyright GNU General Public License v2.0
@@ -33,6 +34,7 @@ from .mmapping import load_memmap
 from multiprocessing import Pool
 import multiprocessing
 import platform
+
 #%%
 
 
@@ -259,11 +261,14 @@ def start_server(slurm_script=None, ipcluster="ipcluster", ncpus=None):
 
             time.sleep(1)
             client = ipyparallel.Client()
+        print('Making Sure everything is up and running')
+        time.sleep(10)
         client.close()
 
     else:
         shell_source(slurm_script)
         pdir, profile = os.environ['IPPPDIR'], os.environ['IPPPROFILE']
+        print([pdir,profile])
         c = Client(ipython_dir=pdir, profile=profile)
         ee = c[:]
         ne = len(ee)
@@ -275,14 +280,20 @@ def start_server(slurm_script=None, ipcluster="ipcluster", ncpus=None):
 #%%
 def shell_source(script):
     """ Run a source-style bash script, copy resulting env vars to current process. """
-    pipe = subprocess.Popen(". %s; env" %
+    #introduce echo to indicate the  end of the output
+    pipe = subprocess.Popen(". %s; env; echo 'FINISHED_CLUSTER'" %
                             script, stdout=subprocess.PIPE, shell=True)
-    output = pipe.communicate()[0]
+
     env = dict()
-    for line in output.splitlines():
-        lsp = line.split("=", 1)
+    while True:
+        line = pipe.stdout.readline().decode('utf-8').rstrip()
+        if 'FINISHED_CLUSTER' in line: # find the keyword set above to determine the end of the output stream
+            break
+        print(line)
+        lsp = str(line).split("=", 1)
         if len(lsp) > 1:
             env[lsp[0]] = lsp[1]
+
     os.environ.update(env)
     pipe.stdout.close()
 #%%
@@ -354,7 +365,7 @@ def stop_server(ipcluster='ipcluster', pdir=None, profile=None, dview=None):
             else:
                 print(line_out)
                 print(
-                    '**** Unrecognized Syntax in ipcluster output, waiting for server to stop anyways ****')
+                    '**** Unrecognized syntax in ipcluster output, waiting for server to stop anyways ****')
 
             proc.stderr.close()
 
@@ -363,20 +374,13 @@ def stop_server(ipcluster='ipcluster', pdir=None, profile=None, dview=None):
 
 
 def setup_cluster(backend='multiprocessing', n_processes=None, single_thread=False):
-    """Setup and/or restart a parallel cluster.
+    """ If necessary, restart the pipyparallel cluster. If we have a slurm backend,
+        restart that instead.
 
     Parameters:
     ----------
     backend: str
-        'multiprocessing' [alias 'local'], 'ipyparallel', and 'SLURM'
-        ipyparallel and SLURM backends try to restart if cluster running.
-        backend='multiprocessing' raises an exception if a cluster is running.
-
-    Returns:
-    ----------
-        c: ipyparallel.Client object; only used for ipyparallel and SLURM backends, else None
-        dview: ipyparallel dview object, or for multiprocessing: Pool object
-        n_processes: number of workers in dview. None means guess at number of machine cores.
+        'multiprocessing', 'ipyparallel', and 'SLURM'
     """
     #todo: todocument
 
@@ -399,9 +403,12 @@ def setup_cluster(backend='multiprocessing', n_processes=None, single_thread=Fal
             except:
                 print('Nothing to stop')
             slurm_script = 'SLURM/slurmStart.sh'
+            print([str(n_processes),slurm_script])
             start_server(slurm_script=slurm_script, ncpus=n_processes)
             pdir, profile = os.environ['IPPPDIR'], os.environ['IPPPROFILE']
+            print([pdir, profile])
             c = Client(ipython_dir=pdir, profile=profile)
+            dview = c[:]
         elif backend == 'ipyparallel':
             stop_server()
             start_server(ncpus=n_processes)
@@ -413,14 +420,10 @@ def setup_cluster(backend='multiprocessing', n_processes=None, single_thread=Fal
             if len(multiprocessing.active_children()) > 0:
                 raise Exception(
                     'A cluster is already runnning. Terminate with dview.terminate() if you want to restart.')
-            c = None
-            if platform.system() == 'Darwin':
+            if (platform.system() == 'Darwin') and (sys.version_info > (3, 0)):
                 multiprocessing.set_start_method('forkserver', force=True)
-                #mp_start_method = 'forkserver'  # default 'fork' crashes multi-threaded BLAS on Mac
-            #else:
-                #mp_start_method = None # use default for platform
-            #ctx = multiprocessing.get_context(mp_start_method)
-            #dview = ctx.Pool(n_processes)
+            c = None
+            
             dview = Pool(n_processes)
         else:
             raise Exception('Unknown Backend')

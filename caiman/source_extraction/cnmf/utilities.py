@@ -1,4 +1,6 @@
+#!/usr/bin/env python
 # -*- coding: utf-8 -*-
+
 """ A set of utilities, mostly for post-processing and visualization
 
 We put arrays on disk as raw bytes, extending along the first dimension.
@@ -30,15 +32,15 @@ from ...base.rois import com
 import pylab as pl
 import scipy
 from ...mmapping import parallel_dot_product
-
+from ...utils.stats import df_percentile
 
 #%%
 def CNMFSetParms(Y, n_processes, K=30, gSig=[5, 5], gSiz=None, ssub=2, tsub=2, p=2, p_ssub=2, p_tsub=2,
                  thr=0.8, method_init='greedy_roi', nb=1, nb_patch=1, n_pixels_per_process=None, block_size=None,
                  check_nan=True, normalize_init=True, options_local_NMF=None, remove_very_bad_comps=False,
                  alpha_snmf=10e2, update_background_components=True, low_rank_background=True, rolling_sum=False,
-                 min_corr=.85, min_pnr=20, deconvolve_options_init=None,
-                 ring_size_factor=1.5, center_psf=True):
+                 min_corr=.85, min_pnr=20,                  
+				 ring_size_factor=1.5, center_psf=False, ssub_B=2, compute_B_3x=True, init_iter=2):
     """Dictionary for setting the CNMF parameters.
 
     Any parameter that is not set get a default value specified
@@ -159,8 +161,8 @@ def CNMFSetParms(Y, n_processes, K=30, gSig=[5, 5], gSiz=None, ssub=2, tsub=2, p
             whether to update the background components in the spatial phase
 
         low_rank_background:bool
-            whether to update the using a low rank approximation. In the False case all the nonzero elements of the background components are updated using hals    
-            (to be used with one background per patch) 
+            whether to update the using a low rank approximation. In the False case all the nonzero elements of the background components are updated using hals
+            (to be used with one background per patch)
 
         method_ls:'lasso_lars'
             'nnls_L0'. Nonnegative least square with L0 penalty
@@ -232,7 +234,8 @@ def CNMFSetParms(Y, n_processes, K=30, gSig=[5, 5], gSiz=None, ssub=2, tsub=2, p
         'only_init': True,
         'skip_refinement': False,
         'remove_very_bad_comps': remove_very_bad_comps,
-        'nb': nb_patch
+        'nb': nb_patch,
+        'in_memory': True
     }
 
     options['preprocess_params'] = {'sn': None,                  # noise level for each pixel
@@ -258,7 +261,7 @@ def CNMFSetParms(Y, n_processes, K=30, gSig=[5, 5], gSiz=None, ssub=2, tsub=2, p
 
     options['init_params'] = {'K': K,                  # number of components
                               'gSig': gSig,                               # size of bounding box
-                              'gSiz': [np.int(np.round((x * 2) + 1)) for x in gSig] if gSiz is None else gSiz,
+                              'gSiz': [np.int((np.ceil(x) * 2) + 1) for x in gSig] if gSiz is None else gSiz,
                               'ssub': ssub,             # spatial downsampling factor
                               'tsub': tsub,             # temporal downsampling factor
                               'nIter': 5,               # number of refinement iterations
@@ -278,9 +281,11 @@ def CNMFSetParms(Y, n_processes, K=30, gSig=[5, 5], gSiz=None, ssub=2, tsub=2, p
                               'rolling_length': 100,
                               'min_corr': min_corr,
                               'min_pnr': min_pnr,
-                              'deconvolve_options_init': deconvolve_options_init,
                               'ring_size_factor': ring_size_factor,
                               'center_psf': center_psf,
+                              'ssub_B': ssub_B,
+                              'compute_B_3x': compute_B_3x,
+                              'init_iter': init_iter
                               }
 
     options['spatial_params'] = {
@@ -353,7 +358,7 @@ def computeDFF_traces(Yr, A, C, bl, quantileMin=8, frames_window=200):
 #%%
 def extract_DF_F(Yr, A, C,  bl, quantileMin=8, frames_window=200, block_size=400, dview=None):
     """ Compute DFF function from cnmf output.
-
+s
      Disclaimer: it might be memory inefficient
 
     Parameters:
@@ -428,7 +433,7 @@ def extract_DF_F(Yr, A, C,  bl, quantileMin=8, frames_window=200, block_size=400
 
 
 #%%
-def detrend_df_f(A, b, C, f, YrA=None, quantileMin=8, frames_window=200, block_size=400):
+def detrend_df_f(A, b, C, f, YrA=None, quantileMin=8, frames_window=500, block_size=400):
     """ Compute DF/F signal without using the original data.
     In general much faster than extract_DF_F
 
@@ -444,7 +449,7 @@ def detrend_df_f(A, b, C, f, YrA=None, quantileMin=8, frames_window=200, block_s
         temporal components (from cnmf cnm.C)
 
     f: ndarray
-        temporal background components    
+        temporal background components
 
     YrA: ndarray
         residual signals
@@ -491,6 +496,126 @@ def detrend_df_f(A, b, C, f, YrA=None, quantileMin=8, frames_window=200, block_s
         Df = scipy.ndimage.percentile_filter(
             B, quantileMin, (frames_window, 1))
         F_df = (F - Fd) / (Df + Fd)
+    return F_df
+
+
+#%%
+
+def fast_prct_filt(input_data, level = 8, frames_window = 1000):
+    """
+    Fast approximate percentage filtering
+    """
+
+    data = np.atleast_2d(input_data).copy()
+    T = np.shape(data)[-1]
+    downsampfact = frames_window
+
+    elm_missing = int(np.ceil(T * 1.0 / downsampfact)
+                              * downsampfact - T)
+    padbefore = int(np.floor(elm_missing/2.))
+    padafter = int(np.ceil(elm_missing/2.))
+    tr_tmp = np.pad(data.T, ((padbefore, padafter), (0, 0)), mode='reflect')
+    numFramesNew, num_traces = np.shape(tr_tmp)
+    #% compute baseline quickly
+
+    tr_BL = np.reshape(tr_tmp, (downsampfact, int(numFramesNew/downsampfact),
+                                num_traces), order='F')
+    #import pdb
+    #pdb.set_trace()
+    tr_BL = np.percentile(tr_BL, level, axis=0)
+    tr_BL = scipy.ndimage.zoom(np.array(tr_BL, dtype=np.float32),
+                               [downsampfact, 1], order=3, mode='nearest',
+                               cval=0.0, prefilter=True)
+
+    if padafter == 0:
+        data -= tr_BL.T
+    else:
+        data -= tr_BL[padbefore:-padafter].T
+
+    return data.squeeze()
+#%%
+
+def detrend_df_f_auto(A, b, C, f, YrA=None, frames_window=1000, use_fast = False):
+
+    """
+    Compute DF/F using an automated level of percentile filtering based on
+    kernel density estimation.
+
+    Parameters:
+    -----------
+    A: scipy.sparse.csc_matrix
+        spatial components (from cnmf cnm.A)
+
+    b: ndarray
+        spatial backgrounds
+
+    C: ndarray
+        temporal components (from cnmf cnm.C)
+
+    f: ndarray
+        temporal background components
+
+    YrA: ndarray
+        residual signals
+
+    frames_window: int
+        number of frames for running quantile
+
+    use_fast: bool
+        flag for using fast approximate percentile filtering
+
+    Returns:
+    ----------
+    F_df:
+        the computed Calcium acitivty to the derivative of f
+
+    """
+    if 'csc_matrix' not in str(type(A)):
+        A = scipy.sparse.csc_matrix(A)
+    if 'array' not in str(type(b)):
+        b = b.toarray()
+    if 'array' not in str(type(C)):
+        C = C.toarray()
+    if 'array' not in str(type(f)):
+        f = f.toarray()
+
+    nA = np.sqrt(np.ravel(A.power(2).sum(axis=0)))
+    nA_mat = scipy.sparse.spdiags(nA, 0, nA.shape[0], nA.shape[0])
+    nA_inv_mat = scipy.sparse.spdiags(1. / nA, 0, nA.shape[0], nA.shape[0])
+    A = A * nA_inv_mat
+    C = nA_mat * C
+    if YrA is not None:
+        YrA = nA_mat * YrA
+
+    F = C + YrA if YrA is not None else C
+    B = A.T.dot(b).dot(f)
+    T = C.shape[-1]
+
+    data_prct, val = df_percentile(F[:frames_window], axis = 1)
+
+    if frames_window is None or frames_window > T:
+        Fd = np.stack([np.percentile(f, prctileMin) for f, prctileMin in
+              zip(F,data_prct)])
+        Df = np.stack([np.percentile(f, prctileMin) for f, prctileMin in
+              zip(B,data_prct)])
+        F_df = (F - Fd[:, None]) / (Df[:, None] + Fd[:, None])
+    else:
+        if use_fast:
+            Fd = np.stack([fast_prct_filt(f, level = prctileMin,
+                                          frames_window = frames_window) for
+                    f, prctileMin in zip(F,data_prct)])
+            Df = np.stack([fast_prct_filt(f, level = prctileMin,
+                                          frames_window = frames_window) for
+                    f, prctileMin in zip(B,data_prct)])
+        else:
+            Fd = np.stack([scipy.ndimage.percentile_filter(
+                            f, prctileMin, (frames_window)) for f, prctileMin in
+                            zip(F,data_prct)])
+            Df = np.stack([scipy.ndimage.percentile_filter(
+                            f, prctileMin, (frames_window)) for f, prctileMin in
+                            zip(B,data_prct)])
+        F_df = (F - Fd) / (Df + Fd)
+
     return F_df
 
 #%%
@@ -655,7 +780,7 @@ def app_vertex_cover(A):
     return np.asarray(L)
 
 
-def update_order(A, new_a=None, prev_list=None):
+def update_order(A, new_a=None, prev_list=None, method='greedy'):
     '''Determines the update order of the temporal components given the spatial
     components by creating a nest of random approximate vertex covers
      Input:
@@ -665,7 +790,7 @@ def update_order(A, new_a=None, prev_list=None):
      new_a: sparse array
           spatial component that is added, in order to efficiently update the orders in online scenarios
      prev_list: list of list
-          orders from previous iteration, you need to pass if new_a is not None 
+          orders from previous iteration, you need to pass if new_a is not None
 
      Outputs:
      ---------
@@ -678,27 +803,12 @@ def update_order(A, new_a=None, prev_list=None):
     '''
     K = np.shape(A)[-1]
     if new_a is None and prev_list is None:
-
-        AA = A.T * A
-        AA.setdiag(0)
-        F = (AA) > 0
-        F = F.toarray()
-        rem_ind = np.arange(K)
-        O = []
-        lo = []
-        while len(rem_ind) > 0:
-            L = np.sort(app_vertex_cover(F[rem_ind, :][:, rem_ind]))
-            if L.size:
-                ord_ind = set(rem_ind) - set(rem_ind[L])
-                rem_ind = rem_ind[L]
-            else:
-                ord_ind = set(rem_ind)
-                rem_ind = []
-
-            O.append(ord_ind)
-            lo.append(len(ord_ind))
-
-        return O[::-1], lo[::-1]
+        
+        if method is 'greedy':
+            prev_list, count_list = update_order_greedy(A, flag_AA=False)
+        else:
+            prev_list, count_list = update_order_random(A, flag_AA=False)
+        return prev_list, count_list
 
     else:
 
@@ -707,10 +817,9 @@ def update_order(A, new_a=None, prev_list=None):
                 'In the online update order you need to provide both new_a and prev_list')
 
         counter = 0
+
         AA = A.T.dot(new_a)
         for group in prev_list:
-
-            #            AA = A[:,list(group)].T.dot(new_a)
             if AA[list(group)].sum() == 0:
                 group.append(K)
                 counter += 1
@@ -721,7 +830,6 @@ def update_order(A, new_a=None, prev_list=None):
                 prev_list = list(prev_list)
                 prev_list.append([K])
 
-#        prev_list.sort(key=len)
         count_list = [len(gr) for gr in prev_list]
 
         return prev_list, count_list
@@ -763,6 +871,38 @@ def order_components(A, C):
     C_or = spdiags(old_div(1., nA2[srt]), 0, K, K) * (C[srt, :])
 
     return A_or, C_or, srt
+
+
+def update_order_random(A, flag_AA=True):
+    """Determies the update order of temporal components using
+    randomized partitions of non-overlapping components
+    """
+    
+    K = np.shape(A)[-1]
+    if flag_AA:
+        AA = A.copy()
+    else:
+        AA = A.T.dot(A)
+        
+    AA.setdiag(0)
+    F = (AA) > 0
+    F = F.toarray()
+    rem_ind = np.arange(K)
+    O = []
+    lo = []
+    while len(rem_ind) > 0:
+        L = np.sort(app_vertex_cover(F[rem_ind, :][:, rem_ind]))
+        if L.size:
+            ord_ind = set(rem_ind) - set(rem_ind[L])
+            rem_ind = rem_ind[L]
+        else:
+            ord_ind = set(rem_ind)
+            rem_ind = []
+
+        O.append(ord_ind)
+        lo.append(len(ord_ind))
+
+    return O[::-1], lo[::-1]    
 
 
 def update_order_greedy(A, flag_AA=True):
@@ -816,15 +956,15 @@ def update_order_greedy(A, flag_AA=True):
 def compute_residuals(Yr_mmap_file, A_, b_, C_, f_, dview=None, block_size=1000, num_blocks_per_run=5):
     '''compute residuals from memory mapped file and output of CNMF
         Params:
-        -------            
-        A_,b_,C_,f_: 
+        -------
+        A_,b_,C_,f_:
                 from CNMF
 
         block_size: int
             number of pixels processed together
 
         num_blocks_per_run: int
-            nnumber of parallel blocks processes 
+            nnumber of parallel blocks processes
 
         Return:
         -------
@@ -854,11 +994,11 @@ def compute_residuals(Yr_mmap_file, A_, b_, C_, f_, dview=None, block_size=1000,
 
 
 #%%
-def normalize_AC(A, C, YrA, b, f):
+def normalize_AC(A, C, YrA, b, f, neurons_sn):
     """ Normalize to unit norm A and b
     Parameters:
     ----------
-    A,C,Yr,b,f: 
+    A,C,Yr,b,f:
         outputs of CNMF
     """
     if 'sparse' in str(type(A)):
@@ -889,4 +1029,8 @@ def normalize_AC(A, C, YrA, b, f):
         b /= nB[np.newaxis, :]
         f *= nB[:, np.newaxis]
 
-    return csc_matrix(A), C, YrA, b, f
+    if neurons_sn is not None:
+        neurons_sn *= nA
+
+    return csc_matrix(A), C, YrA, b, f, neurons_sn
+#%%

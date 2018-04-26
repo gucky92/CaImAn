@@ -1,4 +1,6 @@
+#!/usr/bin/env python
 # -*- coding: utf-8 -*-
+
 """
 @author Andrea Giovannucci,
 
@@ -35,9 +37,8 @@ Copyright (C) 2011, the scikit-image team
  IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  POSSIBILITY OF SUCH DAMAGE.
 
-
-
 """
+
 from __future__ import division
 from __future__ import print_function
 from past.builtins import basestring
@@ -66,6 +67,14 @@ import os
 from cv2 import dft as fftn
 from cv2 import idft as ifftn
 opencv = True
+try:
+    import pycuda.gpuarray as gpuarray
+    import pycuda.driver as cudadrv
+    import atexit
+    HAS_CUDA = True
+
+except ImportError:
+    HAS_CUDA = False
 from numpy.fft import ifftshift
 import itertools
 try:
@@ -132,6 +141,9 @@ class MotionCorrect(object):
        nonneg_movie: boolean
            make the SAVED movie and template mostly nonnegative by removing min_mov from movie
 
+       use_cuda : bool, optional
+           Use skcuda.fft (if available). Default: False
+
        Returns:
        -------
        self
@@ -142,11 +154,17 @@ class MotionCorrect(object):
 
     def __init__(self, fname, min_mov, dview=None, max_shifts=(6, 6), niter_rig=1, splits_rig=14, num_splits_to_process_rig=None,
                  strides=(96, 96), overlaps=(32, 32), splits_els=14, num_splits_to_process_els=[7, None],
-                 upsample_factor_grid=4, max_deviation_rigid=3, shifts_opencv=True, nonneg_movie=False, gSig_filt=None):
+                 upsample_factor_grid=4, max_deviation_rigid=3, shifts_opencv=True, nonneg_movie=False, gSig_filt=None,
+                 use_cuda=False):
         """
         Constructor class for motion correction operations
 
         """
+        if 'ndarray' in str(type(fname)):
+            print('Creating file for motion correction "tmp_mov_mot_corr.hdf5"')
+            cm.movie(fname).save('./tmp_mov_mot_corr.hdf5')
+            fname = ['./tmp_mov_mot_corr.hdf5']
+
         if type(fname) is not list:
             fname = [fname]
 
@@ -166,8 +184,9 @@ class MotionCorrect(object):
         self.min_mov = min_mov
         self.nonneg_movie = nonneg_movie
         self.gSig_filt = gSig_filt
-
-
+        self.use_cuda = use_cuda
+        if self.use_cuda and not HAS_CUDA:
+            print("pycuda is unavailable. Falling back to default FFT.")
 
     def motion_correct_rigid(self, template=None, save_movie=False):
         """
@@ -215,9 +234,11 @@ class MotionCorrect(object):
                 save_movie_rigid=save_movie,
                 add_to_movie=-self.min_mov,
                 nonneg_movie=self.nonneg_movie,
-                gSig_filt=self.gSig_filt)
+                gSig_filt=self.gSig_filt,
+                use_cuda=self.use_cuda)
+            if template is None:
+                self.total_template_rig = _total_template_rig
 
-            self.total_template_rig = _total_template_rig
             self.templates_rig += _templates_rig
             self.fname_tot_rig += [_fname_tot_rig]
             self.shifts_rig += _shifts_rig
@@ -258,8 +279,7 @@ class MotionCorrect(object):
 
         Raise:
         -----
-            Exception('Template contains NaNs, something went wrong. Reconsider
-            the parameters')
+            Exception('Error: Template contains NaNs, Please review the parameters')
 
         """
         num_iter = 1
@@ -267,8 +287,6 @@ class MotionCorrect(object):
             print('generating template by rigid motion correction')
             self = self.motion_correct_rigid()
             self.total_template_els = self.total_template_rig.copy()
-#             pl.imshow(self.total_template_els)
-#             pl.pause(1)
         else:
             self.total_template_els = template
 
@@ -285,7 +303,8 @@ class MotionCorrect(object):
                         dview=self.dview, upsample_factor_grid=self.upsample_factor_grid,
                         max_deviation_rigid=self.max_deviation_rigid, splits=self.splits_els,
                         num_splits_to_process=num_splits_to_process, num_iter=num_iter, template=self.total_template_els,
-                        shifts_opencv=self.shifts_opencv, save_movie=save_movie, nonneg_movie=self.nonneg_movie, gSig_filt=self.gSig_filt)
+                        shifts_opencv=self.shifts_opencv, save_movie=save_movie, nonneg_movie=self.nonneg_movie, gSig_filt=self.gSig_filt,
+                        use_cuda=self.use_cuda)
                 if show_template:
                     pl.imshow(new_template_els)
                     pl.pause(.5)
@@ -293,7 +312,9 @@ class MotionCorrect(object):
                     raise Exception(
                         'Template contains NaNs, something went wrong. Reconsider the parameters')
 
-            self.total_template_els = new_template_els
+            if template is None:
+                self.total_template_els = new_template_els
+
             self.fname_tot_els += [_fname_tot_els]
             self.templates_els += _templates_els
             self.x_shifts_els += _x_shifts_els
@@ -857,222 +878,6 @@ def bin_median(mat, window=10, exclude_nans=False):
 
     return img
 
-
-#%% with buffer
-#    import skimage
-#import cv2
-#
-# mean_online=0
-#
-# count=0
-# bin_size=10
-# count_part=0
-# max_shift_w=25
-# max_shift_h=25
-# multicolor=False
-# show_movie=False
-# square_size=(64,64)
-# fname='/mnt/ceph/neuro/labeling/k37_20160109_AM_150um_65mW_zoom2p2_00001_1-16/images/k37_20160109_AM_150um_65mW_zoom2p2_00001_00001.tif'
-# with skimage.external.tifffile.TiffFile(fname) as tf:
-#    if multicolor:
-#        n_frames_, h_i, w_i = (len(tf)/bin_size,)+tf[0].shape[:2]
-#    else:
-#        n_frames_, h_i, w_i = (len(tf)/bin_size,)+tf[0].shape
-#    buffer_mean=np.zeros((bin_size,h_i,w_i)).astype(np.float32)
-#    means_partials=np.zeros((np.ceil(len(tf)/bin_size)+1,h_i,w_i)).astype(np.float32)
-#
-#
-#    ms_w = max_shift_w
-#    ms_h = max_shift_h
-#    if multicolor:
-#        template=np.median(tf.asarray(slice(0,100,1))[:,:,:,0],0)
-#    else:
-#        template=np.median(tf.asarray(slice(0,100,1)),0)
-#
-#    to_remove=0
-#    if np.percentile(template, 8) < - 0.1:
-#        print('Pixels averages are too negative for template. Removing 1 percentile.')
-#        to_remove=np.percentile(template,1)
-#        template=template-to_remove
-#
-#    means_partials[count_part]=template
-#
-#    template=template[ms_h:h_i-ms_h,ms_w:w_i-ms_w].astype(np.float32)
-#    h, w = template.shape      # template width and height
-#
-#
-#    #% run algorithm, press q to stop it
-#    shifts=[];   # store the amount of shift in each frame
-#    xcorrs=[];
-#    for count,page in enumerate(tf):
-#
-#        if count%bin_size==0 and count>0:
-#
-#            print 'means_partials'
-#            count_part+=1
-#            means_partials[count_part]=np.mean(buffer_mean,0)
-# buffer_mean=np.zeros((bin_size,)+tf[0].shape).astype()
-#            template=np.mean(means_partials[:count_part],0)[ms_h:h_i-ms_h,ms_w:w_i-ms_w]
-#        if multicolor:
-#            buffer_mean[count%bin_size]=page.asarray()[:,:,0]-to_remove
-#        else:
-#            buffer_mean[count%bin_size]=page.asarray()-to_remove
-#
-#        res = cv2.matchTemplate(buffer_mean[count%bin_size],template,cv2.TM_CCORR_NORMED)
-#        top_left = cv2.minMaxLoc(res)[3]
-#
-#        avg_corr=np.mean(res);
-#        sh_y,sh_x = top_left
-#        bottom_right = (top_left[0] + w, top_left[1] + h)
-#
-#        if (0 < top_left[1] < 2 * ms_h-1) & (0 < top_left[0] < 2 * ms_w-1):
-#             # if max is internal, check for subpixel shift using gaussian
-#             # peak registration
-#             log_xm1_y = np.log(res[sh_x-1,sh_y]);
-#             log_xp1_y = np.log(res[sh_x+1,sh_y]);
-#             log_x_ym1 = np.log(res[sh_x,sh_y-1]);
-#             log_x_yp1 = np.log(res[sh_x,sh_y+1]);
-#             four_log_xy = 4*np.log(res[sh_x,sh_y]);
-#
-#             sh_x_n = -(sh_x - ms_h + (log_xm1_y - log_xp1_y) / (2 * log_xm1_y - four_log_xy + 2 * log_xp1_y))
-#             sh_y_n = -(sh_y - ms_w + (log_x_ym1 - log_x_yp1) / (2 * log_x_ym1 - four_log_xy + 2 * log_x_yp1))
-#        else:
-#             sh_x_n = -(sh_x - ms_h)
-#             sh_y_n = -(sh_y - ms_w)
-#
-#        M = np.float32([[1,0,sh_y_n],[0,1,sh_x_n]])
-#        buffer_mean[count%bin_size]= cv2.warpAffine(buffer_mean[count%bin_size],M,(w_i,h_i),flags=cv2.INTER_LINEAR)
-#        if show_movie:
-#            cv2.imshow('frame',(buffer_mean[count%bin_size])*1./300)
-#            cv2.waitKey(int(1./100*1000))
-#        shifts.append([sh_x_n,sh_y_n])
-#        xcorrs.append([avg_corr])
-#        print count
-#
-##        mean_online=mean_online*count*1./(count + 1) + 1./(count + 1)*buffer_mean[count]
-#
-#        count+=1
-
-#%% NON RIGID
-#import scipy
-# chone=cm.load('/Users/agiovann/Documents/MATLAB/Motion_Correction/M_FLUO_1.tif',fr=15)
-# chone=chone[:,8:-8,8:-8]
-# T=np.median(chone,axis=0)
-#Nbasis = 8
-#minIters = 5
-#
-# linear b-splines
-#knots = np.linspace(1,np.shape(T)[0],Nbasis+1);
-#knots = np.hstack([knots[0]-(knots[1]-knots[0]),knots,knots[-1]+(knots[-1]-knots[-2])]);
-#
-# weights=knots[:-2]
-# order=len(knots)-len(weights)-1
-#
-# x=range(T.shape[0])
-#
-#B = np.zeros((len(x),len(weights)))
-# for ii in range(len(knots)-order-1):
-#    B[:,ii] = bin(this.knots,ii,this.order,x);
-# end
-#
-# spl = fastBSpline(knots,knots(1:end-2))
-#
-#
-# B = spl.getBasis((1:size(T,1))');
-# Tnorm = T(:)-mean(T(:));
-# Tnorm = Tnorm/sqrt(sum(Tnorm.^2));
-#B = full(B);
-#
-# lambda = .0001*median(T(:))^2;
-# theI = (eye(Nbasis+1)*lambda);
-#
-# Bi = B(:,1:end-1).*B(:,2:end);
-# allBs = [B.^2,Bi];
-#[xi,yi] = meshgrid(1:size(T,2),1:size(T,1));
-
-#%%
-# def doLucasKanade_singleFrame(T, I, B, allBs, xi, yi, theI, Tnorm, nBasis=4, minIters=5):
-#
-#    maxIters = 50
-#    deltacorr = 0.0005
-#
-#    _ , w = np.shape(T)
-#
-#    #Find optimal image warp via Lucas Kanade
-#    c0 = mycorr(I(:), Tnorm);
-#
-#    for ii = 1:maxIters
-# %Displaced template
-##        Dx = repmat((B*dpx), 1, w);
-##        Dy = repmat((B*dpy), 1, w);
-#
-#        Id = interp2(I, xi, yi, 'linear', 0);
-#
-#        %gradient
-#        [dTx, dTy] = imgradientxy(Id, 'centraldifference');
-#        dTx(:, [1, ]) = 0;
-#        dTy([1, ], :) = 0;
-#
-#        if ii > minIters
-#            c = mycorr(Id(:), Tnorm);
-#            if c - c0 < deltacorr && ii > 1
-#                break;
-#
-#            c0 = c;
-#
-#
-#        del = T - Id;
-#
-#        %special trick for g (easy)
-#        gx = B'*sum(del.*dTx, 2);
-#        gy = B'*sum(del.*dTy, 2);
-#
-#        %special trick for H - harder
-#        Hx = constructH(allBs'*sum(dTx.^2,2), nBasis+1) + theI;
-#        Hy = constructH(allBs'*sum(dTy.^2,2), nBasis+1) + theI;
-#
-#        dpx = Hx\gx;
-#        dpy = Hy\gy;
-#
-#    return [Id, dpx, dpy]
-#
-##         dpx = dpx + damping*dpx_;
-##         dpy = dpy + damping*dpy_;
-#
-#
-#
-# function thec = mycorr(A,B)
-#    meanA = mean(A(:));
-#    A = A(:) - meanA;
-#    A = A / sqrt(sum(A.^2));
-#    thec = A'*B;
-#
-#
-# function H2 = constructH(Hd,ns)
-#%     H2d1 = Hd(1:ns)';
-#%     H2d2 = [Hd(ns+1:);0]';
-#%     H2d3 = [0;Hd(ns+1:)]';
-#%
-#%     if isa(Hd, 'gpuArray')
-#%         H2 = gpuArray.zeros(ns);
-#%     else
-#%         H2 = zeros(ns);
-#%
-#%
-#%     H2((0:ns-1)*ns+(1:ns)) = H2d1;
-#%     H2(((1:ns-1)*ns+(1:ns-1))) = H2d2(1:-1);
-#%     H2(((0:ns-2)*ns+(1:ns-1))+1) = H2d3(2:);
-#
-#    if isa(Hd, 'gpuArray')
-#        H2 = gpuArray.zeros(ns);
-#    else
-#        H2 = zeros(ns);
-#
-#
-#    H2((0:ns-1)*ns+(1:ns)) = Hd(1:ns)';
-#    H2(((1:ns-1)*ns+(1:ns-1))) = Hd(ns+1:)';
-#    H2(((0:ns-2)*ns+(1:ns-1))+1) = Hd(ns+1:)';
-#%%
 def process_movie_parallel(arg_in):
     #todo: todocument
     fname, fr, margins_out, template, max_shift_w, max_shift_h, remove_blanks, apply_smooth, save_hdf5 = arg_in
@@ -1094,7 +899,7 @@ def process_movie_parallel(arg_in):
     elif isinstance(fname, basestring):
         Yr = cm.load(fname, fr=fr)
     else:
-        raise Exception('Unkown input type:' + type_input)
+        raise Exception('Unknown input type:' + type_input)
 
     if Yr.ndim > 1:
         #        print('loaded')
@@ -1347,6 +1152,30 @@ def _compute_error(cross_correlation_max, src_amp, target_amp):
         (src_amp * target_amp)
     return np.sqrt(np.abs(error))
 
+def init_cuda_process():
+    """
+    Initialize a PyCUDA context at global scope so that it can be accessed
+    from processes when using multithreading
+    """
+    global cudactx
+
+    cudadrv.init()
+    dev = cudadrv.Device(0)
+    cudactx = dev.make_context()
+    atexit.register(cudactx.pop)
+
+
+def close_cuda_process(n):
+    """
+    Cleanup cuda process
+    """
+
+    import skcuda.misc as cudamisc
+    try:
+        cudamisc.done_context(cudactx)
+    except:
+        pass
+
 #%%
 
 def register_translation_3d(src_image, target_image, space = "real",
@@ -1446,7 +1275,8 @@ def register_translation_3d(src_image, target_image, space = "real",
 #%%
 
 def register_translation(src_image, target_image, upsample_factor=1,
-                         space="real", shifts_lb=None, shifts_ub=None, max_shifts=(10, 10)):
+                         space="real", shifts_lb=None, shifts_ub=None, max_shifts=(10, 10),
+                         use_cuda=False):
     """
 
     adapted from SIMA (https://github.com/losonczylab) and the
@@ -1511,6 +1341,9 @@ def register_translation(src_image, target_image, upsample_factor=1,
         will be FFT'd to compute the correlation, while "fourier" data will
         bypass FFT of input data.  Case insensitive.
 
+    use_cuda : bool, optional
+        Use skcuda.fft (if available). Default: False
+
     Returns:
     -------
     shifts : ndarray
@@ -1552,13 +1385,50 @@ def register_translation(src_image, target_image, upsample_factor=1,
         raise NotImplementedError("Error: register_translation only supports "
                                   "subpixel registration for 2D images")
 
+    if HAS_CUDA and use_cuda:
+        from skcuda.fft import Plan
+        from skcuda.fft import fft as cudafft
+        from skcuda.fft import ifft as cudaifft
+        try:
+            cudactx
+        except NameError:
+            init_cuda_process()
+
     # assume complex data is already in Fourier space
     if space.lower() == 'fourier':
         src_freq = src_image
         target_freq = target_image
     # real data needs to be fft'd.
     elif space.lower() == 'real':
-        if opencv:
+        if HAS_CUDA and use_cuda:
+            # src_image_cpx = np.array(src_image, dtype=np.complex128, copy=False)
+            # target_image_cpx = np.array(target_image, dtype=np.complex128, copy=False)
+
+            image_gpu = gpuarray.to_gpu(np.stack((src_image, target_image)).astype(np.complex128))
+            freq_gpu = gpuarray.empty((2, src_image.shape[0], src_image.shape[1]), dtype=np.complex128)
+            # src_image_gpu = gpuarray.to_gpu(src_image_cpx)
+            # src_freq_gpu = gpuarray.empty(src_image_cpx.shape, np.complex128)
+
+            # target_image_gpu = gpuarray.to_gpu(target_image_cpx)
+            # target_freq_gpu = gpuarray.empty(target_image_cpx.shape, np.complex128)
+
+            plan = Plan(src_image.shape, np.complex128, np.complex128, batch=2)
+            # cudafft(src_image_gpu, src_freq_gpu, plan, scale=True)
+            # cudafft(target_image_gpu, target_freq_gpu, plan, scale=True)
+            cudafft(image_gpu, freq_gpu, plan, scale=True)
+            # src_freq = src_freq_gpu.get()
+            # target_freq = target_freq_gpu.get()
+            freq = freq_gpu.get()
+            src_freq = freq[0, :, :]
+            target_freq = freq[1, :, :]
+
+            # del(src_image_gpu)
+            # del(src_freq_gpu)
+            # del(target_image_gpu)
+            # del(target_freq_gpu)
+            del(image_gpu)
+            del(freq_gpu)
+        elif opencv:
             src_freq_1 = fftn(
                 src_image, flags=cv2.DFT_COMPLEX_OUTPUT + cv2.DFT_SCALE)
             src_freq = src_freq_1[:, :, 0] + 1j * src_freq_1[:, :, 1]
@@ -1583,7 +1453,14 @@ def register_translation(src_image, target_image, upsample_factor=1,
     # Whole-pixel shift - Compute cross-correlation by an IFFT
     shape = src_freq.shape
     image_product = src_freq * target_freq.conj()
-    if opencv:
+    if HAS_CUDA and use_cuda:
+        image_product_gpu = gpuarray.to_gpu(image_product)
+        cross_correlation_gpu = gpuarray.empty(
+            image_product.shape, np.complex128)
+        iplan = Plan(image_product.shape, np.complex128, np.complex128)
+        cudaifft(image_product_gpu, cross_correlation_gpu, iplan, scale=True)
+        cross_correlation = cross_correlation_gpu.get()
+    elif opencv:
 
         image_product_cv = np.dstack(
             [np.real(image_product), np.imag(image_product)])
@@ -1592,8 +1469,6 @@ def register_translation(src_image, target_image, upsample_factor=1,
         cross_correlation = cross_correlation[:,
                                               :, 0] + 1j * cross_correlation[:, :, 1]
     else:
-        shape = src_freq.shape
-        image_product = src_freq * target_freq.conj()
         cross_correlation = ifftn(image_product)
 
     # Locate maximum
@@ -1673,86 +1548,6 @@ def register_translation(src_image, target_image, upsample_factor=1,
     return shifts, src_freq, _compute_phasediff(CCmax)
 
 #%%
-
-
-#def apply_shifts_dft(src_freq, shifts, diffphase, is_freq=True, border_nan=False):
-#    """
-#    adapted from SIMA (https://github.com/losonczylab) and the
-#    scikit-image (http://scikit-image.org/) package.
-#
-#
-#    Unless otherwise specified by LICENSE.txt files in individual
-#    directories, all code is
-#
-#    Copyright (C) 2011, the scikit-image team
-#    All rights reserved.
-#
-#    Redistribution and use in source and binary forms, with or without
-#    modification, are permitted provided that the following conditions are
-#    met:
-#
-#     1. Redistributions of source code must retain the above copyright
-#        notice, this list of conditions and the following disclaimer.
-#     2. Redistributions in binary form must reproduce the above copyright
-#        notice, this list of conditions and the following disclaimer in
-#        the documentation and/or other materials provided with the
-#        distribution.
-#     3. Neither the name of skimage nor the names of its contributors may be
-#        used to endorse or promote products derived from this software without
-#        specific prior written permission.
-#
-#    THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR
-#    IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
-#    WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-#    DISCLAIMED. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY DIRECT,
-#    INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
-#    (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
-#    SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
-#    HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
-#    STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING
-#    IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-#    POSSIBILITY OF SUCH DAMAGE.
-#    apply shifts using inverse dft
-#    src_freq: ndarray
-#        if is_freq it is fourier transform image else original image
-#    shifts: shifts to apply
-#    diffphase: comes from the register_translation output
-#
-#    """
-#    shifts = shifts[::-1]
-#    if not is_freq:
-#        src_freq = np.dstack([np.real(src_freq), np.imag(src_freq)])
-#        src_freq = fftn(src_freq, flags=cv2.DFT_COMPLEX_OUTPUT + cv2.DFT_SCALE)
-#        src_freq = src_freq[:, :, 0] + 1j * src_freq[:, :, 1]
-#        src_freq = np.array(src_freq, dtype=np.complex128, copy=False)
-#
-#    nc, nr = np.shape(src_freq)
-#    Nr = ifftshift(np.arange(-np.fix(old_div(nr, 2.)),
-#                             np.ceil(old_div(nr, 2.))))
-#    Nc = ifftshift(np.arange(-np.fix(old_div(nc, 2.)),
-#                             np.ceil(old_div(nc, 2.))))
-#    Nr, Nc = np.meshgrid(Nr, Nc)
-#
-#    Greg = src_freq * \
-#        np.exp(1j * 2 * np.pi *
-#               (-shifts[0] * 1. * Nr / nr - shifts[1] * 1. * Nc / nc))
-#    Greg = Greg.dot(np.exp(1j * diffphase))
-#    Greg = np.dstack([np.real(Greg), np.imag(Greg)])
-#    new_img = ifftn(Greg)[:, :, 0]
-#    if border_nan:
-#        max_w, max_h, min_w, min_h = 0, 0, 0, 0
-#        max_h, max_w = np.ceil(np.maximum(
-#            (max_h, max_w), shifts)).astype(np.int)
-#        min_h, min_w = np.floor(np.minimum(
-#            (min_h, min_w), shifts)).astype(np.int)
-#        new_img[:max_h, :] = np.nan
-#        if min_h < 0:
-#            new_img[min_h:, :] = np.nan
-#        new_img[:, :max_w] = np.nan
-#        if min_w < 0:
-#            new_img[:, min_w:] = np.nan
-#
-#    return new_img
 
 def apply_shifts_dft(src_freq, shifts, diffphase, is_freq=True, border_nan=False):
     """
@@ -1940,22 +1735,19 @@ def create_weight_matrix_for_blending(img, overlaps, strides):
 #%%
 def low_pass_filter_space(img_orig, gSig_filt):
     ksize = tuple([(3 * i) // 2 * 2 + 1 for i in gSig_filt])
-    # return cv2.GaussianBlur(img_orig, ksize=ksize, sigmaX=gSig_filt[0],sigmaY=gSig_filt[1], borderType=cv2.BORDER_REFLECT) \
-    #                        - cv2.boxFilter(img_orig, ddepth=-1,ksize=ksize, borderType=cv2.BORDER_REFLECT, normalize = True)
     ker = cv2.getGaussianKernel(ksize[0], gSig_filt[0])
     ker2D = ker.dot(ker.T)
     nz = np.nonzero(ker2D >= ker2D[:, 0].max())
     zz = np.nonzero(ker2D < ker2D[:, 0].max())
     ker2D[nz] -= ker2D[nz].mean()
     ker2D[zz] = 0
-    #ker -= ker.mean()
-    # return cv2.sepFilter2D(np.array(img_orig,dtype=np.float32),-1,kernelX = ker, kernelY = ker, borderType=cv2.BORDER_REFLECT)
     return cv2.filter2D(np.array(img_orig, dtype=np.float32), -1, ker2D, borderType=cv2.BORDER_REFLECT)
 #%%
 
 
 def tile_and_correct(img, template, strides, overlaps, max_shifts, newoverlaps=None, newstrides=None, upsample_factor_grid=4,
-                     upsample_factor_fft=10, show_movie=False, max_deviation_rigid=2, add_to_movie=0, shifts_opencv=False, gSig_filt=None):
+                     upsample_factor_fft=10, show_movie=False, max_deviation_rigid=2, add_to_movie=0, shifts_opencv=False, gSig_filt=None,
+                     use_cuda=False):
     """ perform piecewise rigid motion correction iteration, by
         1) dividing the FOV in patches
         2) motion correcting each patch separately
@@ -2001,12 +1793,9 @@ def tile_and_correct(img, template, strides, overlaps, max_shifts, newoverlaps=N
     filt_sig_size: tuple
         standard deviation and size of gaussian filter to center filter data in case of one photon imaging data
 
-
+    use_cuda : bool, optional
+        Use skcuda.fft (if available). Default: False
     """
-
-
-#    if (add_to_movie != 0) and gSig_filt is not None:
-#        raise Exception('When gSig_filt or gSiz_filt are used add_to_movie must be zero!')
 
     img = img.astype(np.float64).copy()
     template = template.astype(np.float64).copy()
@@ -2014,19 +1803,14 @@ def tile_and_correct(img, template, strides, overlaps, max_shifts, newoverlaps=N
     if gSig_filt is not None:
 
         img_orig = img.copy()
-#        template_orig = template.copy()
         img = low_pass_filter_space(img_orig, gSig_filt)
-        #cv2.GaussianBlur(img_orig, ksize=ksize, sigmaX=gSig_filt[0],sigmaY=gSig_filt[1], borderType=cv2.BORDER_REFLECT) \
-#                            - cv2.boxFilter(img_orig, ddepth=-1,ksize=ksize, borderType=cv2.BORDER_REFLECT)
-#        template = cv2.GaussianBlur(template_orig, ksize=ksize, sigmaX=gSig_filt[0],sigmaY=gSig_filt[1], borderType=cv2.BORDER_REFLECT) \
-#                            - cv2.boxFilter(template_orig, ddepth=-1,ksize=ksize, borderType=cv2.BORDER_REFLECT)
 
     img = img + add_to_movie
     template = template + add_to_movie
 
     # compute rigid shifts
     rigid_shts, sfr_freq, diffphase = register_translation(
-        img, template, upsample_factor=upsample_factor_fft, max_shifts=max_shifts)
+        img, template, upsample_factor=upsample_factor_fft, max_shifts=max_shifts, use_cuda=use_cuda)
 
     if max_deviation_rigid == 0:
 
@@ -2072,7 +1856,7 @@ def tile_and_correct(img, template, strides, overlaps, max_shifts, newoverlaps=N
 
         # extract shifts for each patch
         shfts_et_all = [register_translation(
-            a, b, c, shifts_lb=lb_shifts, shifts_ub=ub_shifts, max_shifts=max_shifts) for a, b, c in zip(
+            a, b, c, shifts_lb=lb_shifts, shifts_ub=ub_shifts, max_shifts=max_shifts, use_cuda=use_cuda) for a, b, c in zip(
             imgs, templates, [upsample_factor_fft] * num_tiles)]
         shfts = [sshh[0] for sshh in shfts_et_all]
         diffs_phase = [sshh[2] for sshh in shfts_et_all]
@@ -2224,7 +2008,7 @@ def compute_metrics_motion_correction(fname, final_size_x, final_size_y, swap_di
     m = m[:, max_shft_x:max_shft_x_1, max_shft_y:max_shft_y_1]
     if np.sum(np.isnan(m)) > 0:
         print(m.shape)
-        raise Exception('Movie contains nan')
+        raise Exception('Movie contains NaN')
 
     print('Local correlations..')
     img_corr = m.local_correlations(eight_neighbours=True, swap_dim=swap_dim)
@@ -2293,7 +2077,7 @@ def compute_metrics_motion_correction(fname, final_size_x, final_size_y, swap_di
 #%%
 def motion_correct_batch_rigid(fname, max_shifts, dview=None, splits=56, num_splits_to_process=None, num_iter=1,
                                template=None, shifts_opencv=False, save_movie_rigid=False, add_to_movie=None,
-                               nonneg_movie=False, gSig_filt=None, subidx=slice(None, None, 1)):
+                               nonneg_movie=False, gSig_filt=None, subidx=slice(None, None, 1), use_cuda=False):
     """
     Function that perform memory efficient hyper parallelized rigid motion corrections while also saving a memory mappable file
 
@@ -2328,6 +2112,9 @@ def motion_correct_batch_rigid(fname, max_shifts, dview=None, splits=56, num_spl
 
     subidx: slice
         Indices to slice
+
+    use_cuda : bool, optional
+        Use skcuda.fft (if available). Default: False
 
     Returns:
     --------
@@ -2371,7 +2158,7 @@ def motion_correct_batch_rigid(fname, max_shifts, dview=None, splits=56, num_spl
         add_to_movie = -np.min(template)
 
     if np.isnan(add_to_movie):
-        raise Exception('The movie contains nans. Nans are not allowed!')
+        raise Exception('The movie contains NaNs. NaNs are not allowed!')
     else:
         print('Adding to movie ' + str(add_to_movie))
 
@@ -2389,7 +2176,8 @@ def motion_correct_batch_rigid(fname, max_shifts, dview=None, splits=56, num_spl
                                                              add_to_movie=add_to_movie, template=old_templ, max_shifts=max_shifts, max_deviation_rigid=0,
                                                              dview=dview, save_movie=save_movie, base_name=os.path.split(
                                                                  fname)[-1][:-4] + '_rig_', subidx = subidx,
-                                                             num_splits=num_splits_to_process, shifts_opencv=shifts_opencv, nonneg_movie=nonneg_movie, gSig_filt=gSig_filt)
+                                                             num_splits=num_splits_to_process, shifts_opencv=shifts_opencv, nonneg_movie=nonneg_movie, gSig_filt=gSig_filt,
+                                                             use_cuda=use_cuda)
 
         new_templ = np.nanmedian(np.dstack([r[-1] for r in res_rig]), -1)
         if gSig_filt is not None:
@@ -2412,7 +2200,8 @@ def motion_correct_batch_rigid(fname, max_shifts, dview=None, splits=56, num_spl
 def motion_correct_batch_pwrigid(fname, max_shifts, strides, overlaps, add_to_movie, newoverlaps=None, newstrides=None,
                                  dview=None, upsample_factor_grid=4, max_deviation_rigid=3,
                                  splits=56, num_splits_to_process=None, num_iter=1,
-                                 template=None, shifts_opencv=False, save_movie=False, nonneg_movie=False, gSig_filt=None):
+                                 template=None, shifts_opencv=False, save_movie=False, nonneg_movie=False, gSig_filt=None,
+                                 use_cuda=False):
     """
     Function that perform memory efficient hyper parallelized rigid motion corrections while also saving a memory mappable file
 
@@ -2457,6 +2246,9 @@ def motion_correct_batch_pwrigid(fname, max_shifts, strides, overlaps, add_to_mo
     save_movie_rigid: boolean
          toggle save movie
 
+    use_cuda : bool, optional
+        Use skcuda.fft (if available). Default: False
+
     Returns:
     --------
     fname_tot_rig: str
@@ -2481,7 +2273,7 @@ def motion_correct_batch_pwrigid(fname, max_shifts, strides, overlaps, add_to_mo
         new_templ = template
 
     if np.isnan(add_to_movie):
-        raise Exception('The template contains nans. Nans are not allowed!')
+        raise Exception('The template contains NaNs. NaNs are not allowed!')
     else:
         print('Adding to movie ' + str(add_to_movie))
 
@@ -2500,7 +2292,8 @@ def motion_correct_batch_pwrigid(fname, max_shifts, strides, overlaps, add_to_mo
                                                             newoverlaps=newoverlaps, newstrides=newstrides,
                                                             upsample_factor_grid=upsample_factor_grid, order='F', dview=dview, save_movie=save_movie,
                                                             base_name=os.path.split(fname)[-1][:-4] + '_els_', num_splits=num_splits_to_process,
-                                                            shifts_opencv=shifts_opencv, nonneg_movie=nonneg_movie, gSig_filt=gSig_filt)
+                                                            shifts_opencv=shifts_opencv, nonneg_movie=nonneg_movie, gSig_filt=gSig_filt,
+                                                            use_cuda=use_cuda)
 
         new_templ = np.nanmedian(np.dstack([r[-1] for r in res_el]), -1)
         if gSig_filt is not None:
@@ -2534,27 +2327,27 @@ def tile_and_correct_wrapper(params):
 
     img_name, out_fname, idxs, shape_mov, template, strides, overlaps, max_shifts,\
         add_to_movie, max_deviation_rigid, upsample_factor_grid, newoverlaps, newstrides, \
-        shifts_opencv, nonneg_movie, gSig_filt, is_fiji = params
+        shifts_opencv, nonneg_movie, gSig_filt, is_fiji, use_cuda = params
 
     name, extension = os.path.splitext(img_name)[:2]
 
+    shift_info = []
     if extension == '.tif' or extension == '.tiff':  # check if tiff file
         if is_fiji:
             imgs = imread(img_name)[idxs]
         else:
             imgs = imread(img_name, key=idxs)
-        mc = np.zeros(imgs.shape, dtype=np.float32)
-        shift_info = []
     elif extension == '.sbx':  # check if sbx file
         imgs = cm.base.movies.sbxread(name, idxs[0], len(idxs))
         mc = np.zeros(imgs.shape, dtype=np.float32)
         shift_info = []
-    elif extension in ['.hdf5', '.h5', '.npy']:
+    elif extension in ['.hdf5', '.h5', '.npy', '.sima']:
         imgs = cm.load(img_name, subindices=list(idxs))
         mc = np.zeros(imgs.shape, dtype=np.float32)
         shift_info = []
     else:
         raise NameError('Extension {} not supported'.format(extension))
+
     for count, img in enumerate(imgs):
         if count % 10 == 0:
             print(count)
@@ -2564,7 +2357,8 @@ def tile_and_correct_wrapper(params):
                                                                        upsample_factor_grid=upsample_factor_grid,
                                                                        upsample_factor_fft=10, show_movie=False,
                                                                        max_deviation_rigid=max_deviation_rigid,
-                                                                       shifts_opencv=shifts_opencv, gSig_filt=gSig_filt)
+                                                                       shifts_opencv=shifts_opencv, gSig_filt=gSig_filt,
+                                                                       use_cuda=use_cuda)
         shift_info.append([total_shift, start_step, xy_grid])
 
     if out_fname is not None:
@@ -2584,7 +2378,8 @@ def tile_and_correct_wrapper(params):
 def motion_correction_piecewise(fname, splits, strides, overlaps, add_to_movie=0, template=None,
                                 max_shifts=(12, 12), max_deviation_rigid=3, newoverlaps=None, newstrides=None,
                                 upsample_factor_grid=4, order='F', dview=None, save_movie=True,
-                                base_name=None, subidx = None, num_splits=None, shifts_opencv=False, nonneg_movie=False, gSig_filt=None):
+                                base_name=None, subidx = None, num_splits=None, shifts_opencv=False, nonneg_movie=False, gSig_filt=None,
+                                use_cuda=False):
     """
 
     """
@@ -2594,12 +2389,12 @@ def motion_correction_piecewise(fname, splits, strides, overlaps, add_to_movie=0
 
     if extension == '.tif' or extension == '.tiff':  # check if tiff file
         with tifffile.TiffFile(fname) as tf:
-            if len(tf) == 1:  # Fiji-generated TIF
+            T = len(tf.pages)
+            if T == 1:  # Fiji-generated TIF
                 is_fiji = True
                 T, d1, d2 = tf[0].shape
             else:
-                d1, d2 = tf[0].shape
-                T = len(tf)
+                d1, d2 = tf.pages[0].shape
 
     elif extension == '.sbx':  # check if sbx file
 
@@ -2608,6 +2403,14 @@ def motion_correction_piecewise(fname, splits, strides, overlaps, add_to_movie=0
         d2 = shape[0]
         T = shape[2]
 
+    elif extension == '.sima':  # check if sbx file
+        import sima
+        dataset = sima.ImagingDataset.load(fname)
+        shape = dataset.sequences[0].shape
+        d1 = shape[2]
+        d2 = shape[3]
+        T = shape[0]
+        del dataset
     elif extension == '.npy':
         T, d1, d2 = np.load(fname, mmap_mode='r').shape
         #raise Exception('Numpy not supported at the moment')
@@ -2659,15 +2462,19 @@ def motion_correction_piecewise(fname, splits, strides, overlaps, add_to_movie=0
                   shape=shape_mov, order=order)
     else:
         fname_tot = None
+
     pars = []
     for idx in idxs:
         pars.append([fname, fname_tot, idx, shape_mov, template, strides, overlaps, max_shifts, np.array(
             add_to_movie, dtype=np.float32), max_deviation_rigid, upsample_factor_grid,
-            newoverlaps, newstrides, shifts_opencv, nonneg_movie, gSig_filt, is_fiji])
+            newoverlaps, newstrides, shifts_opencv, nonneg_movie, gSig_filt, is_fiji, use_cuda])
 
     if dview is not None:
         print('** Startting parallel motion correction **')
-        if 'multiprocessing' in str(type(dview)):
+        if HAS_CUDA and use_cuda:
+            res = dview.map(tile_and_correct_wrapper,pars)
+            dview.map(close_cuda_process, range(len(pars)))
+        elif 'multiprocessing' in str(type(dview)):
             res = dview.map_async(tile_and_correct_wrapper, pars).get(4294967)
         else:
             res = dview.map_sync(tile_and_correct_wrapper, pars)

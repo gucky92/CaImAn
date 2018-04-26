@@ -1,5 +1,7 @@
+#!/usr/bin/env python
 # -*- coding: utf-8 -*-
-""" Suite of functions that are helpfull work with and manage the movie
+
+""" Suite of functions that help manage movie data
 
 Contains the movie class.
 
@@ -10,6 +12,7 @@ See Also:
 .. image::
 @author andrea giovannucci , deep-introspection
 """
+
 # \package caiman/dource_ectraction/cnmf
 # \version   1.0
 # \copyright GNU General Public License v2.0
@@ -1280,7 +1283,7 @@ def load(file_name,fr=30,start_time=0,meta_data=None,subindices=None,shape=None,
         elif extension == '.h5':
             if is_behavior:
                 with h5py.File(file_name, "r") as f:
-                    kk = f.keys()
+                    kk = list(f.keys())
                     kk.sort(key=lambda x: np.int(x.split('_')[-1]))
                     input_arr = []
                     for trial in kk:

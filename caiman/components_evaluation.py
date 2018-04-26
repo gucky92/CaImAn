@@ -1,9 +1,12 @@
+#!/usr/bin/env python
 # -*- coding: utf-8 -*-
+
 """
 Created on Thu Oct 20 12:12:34 2016
 
 @author: agiovann
 """
+
 from __future__ import division
 from __future__ import print_function
 from builtins import range
@@ -15,6 +18,7 @@ from scipy.stats import norm
 import scipy
 import cv2
 import itertools
+from caiman.paths import caiman_datadir
 
 def estimate_noise_mode(traces, robust_std=False, use_mode_fast=False, return_all=False):
     """ estimate the noise in the traces under assumption that signals are sparse and only positive. The last dimension should be time.
@@ -213,7 +217,7 @@ def classify_components_ep(Y, A, C, b, f, Athresh=0.1, Npeaks=5, tB=-3, tA=10, t
 
             if len(indexes) == 0:
                 indexes = set(LOC[i])
-                print('Neuron:' + str(i) + ' includes overlaping spiking neurons')
+                print('Neuron:' + str(i) + ' includes overlapping spiking neurons')
 
             indexes = np.array(list(indexes)).astype(np.int)
             px = np.where(atemp > 0)[0]
@@ -231,25 +235,38 @@ def classify_components_ep(Y, A, C, b, f, Athresh=0.1, Npeaks=5, tB=-3, tA=10, t
 #%%
 
 
-def evaluate_components_CNN(A, dims, gSig, model_name='use_cases/CaImAnpaper/cnn_model', patch_size=50, loaded_model=None, isGPU=False):
+def evaluate_components_CNN(A, dims, gSig, model_name='model/cnn_model', patch_size=50, loaded_model=None, isGPU=False):
     """ evaluate component quality using a CNN network
 
     """
+
+    import os
     if not isGPU:
-        import os
+
         os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
 
-    try:
-        from keras.models import model_from_json
-    except:
-        print('PROBLEM LOADING KERAS: cannot use classifier')
+#    try:
+    os.environ["KERAS_BACKEND"] = "tensorflow"
+    from keras.models import model_from_json
+#    except:
+#        print('PROBLEM LOADING KERAS: cannot use classifier')
+
 
     if loaded_model is None:
-        json_file = open(model_name + '.json', 'r')
-        loaded_model_json = json_file.read()
-        json_file.close()
+        if os.path.isfile(os.path.join(caiman_datadir(), model_name + ".json")):
+            model_file    = os.path.join(caiman_datadir(), model_name + ".json")
+            model_weights = os.path.join(caiman_datadir(), model_name + ".h5")
+        elif os.path.isfile(model_name + ".json"):
+            model_file    = model_name + ".json"
+            model_weights = model_name + ".h5"
+        else:
+            raise FileNotFoundError("File for requested model {} not found".format(model_name))
+        with open(model_file, 'r') as json_file:
+            loaded_model_json = json_file.read()
+
         loaded_model = model_from_json(loaded_model_json)
         loaded_model.load_weights(model_name + '.h5')
+        loaded_model.compile('sgd', 'mse')
         print("Loaded model from disk")
     half_crop = np.minimum(
         gSig[0] * 4 + 1, patch_size), np.minimum(gSig[1] * 4 + 1, patch_size)
@@ -418,8 +435,6 @@ def evaluate_components_placeholder(params):
     import caiman as cm
     fname, traces, A, C, b, f, final_frate, remove_baseline, N, robust_std, Athresh, Npeaks, thresh_C = params
     Yr, dims, T = cm.load_memmap(fname)
-    #d1, d2 = dims
-    #images = np.reshape(Yr.T, [T] + list(dims), order='F')
     Y = np.reshape(Yr, dims + (T,), order='F')
     fitness_raw, fitness_delta, _, _, r_values, significant_samples = \
         evaluate_components(Y, traces, A, C, b, f, final_frate, remove_baseline=remove_baseline,
@@ -432,7 +447,7 @@ def evaluate_components_placeholder(params):
 
 def estimate_components_quality_auto(Y, A, C, b, f, YrA, frate, decay_time, gSig, dims, dview=None, min_SNR=2, r_values_min=0.9,
                                      r_values_lowest=-1, Npeaks=10, use_cnn=True, thresh_cnn_min=0.95, thresh_cnn_lowest=0.1,
-                                     thresh_fitness_delta=-20., min_std_reject=0.5):
+                                     thresh_fitness_delta=-20., min_std_reject=0.5, gSig_range = None):
     ''' estimates the quality of component automatically
 
     Parameters:
@@ -448,6 +463,9 @@ def estimate_components_quality_auto(Y, A, C, b, f, YrA, frate, decay_time, gSig
 
     gSig:
         same as CNMF parameter
+
+    gSig_range: list
+        list of possible neuronal sizes
 
     dims:
         same as CNMF parameter
@@ -505,6 +523,7 @@ def estimate_components_quality_auto(Y, A, C, b, f, YrA, frate, decay_time, gSig
     # components with SNR lower than 0.5 will be rejected
     thresh_fitness_raw_reject = scipy.special.log_ndtr(
         -min_std_reject) * N_samples
+
     traces = C + YrA
 
     _, _, fitness_raw, _, r_values = estimate_components_quality(
@@ -512,33 +531,55 @@ def estimate_components_quality_auto(Y, A, C, b, f, YrA, frate, decay_time, gSig
         fitness_delta_min=thresh_fitness_delta, return_all=True, dview=dview, num_traces_per_group=50, N=N_samples)
 
     comp_SNR = -norm.ppf(np.exp(fitness_raw / N_samples))
+
+    idx_components, idx_components_bad, cnn_values = select_components_from_metrics(
+                A, dims, gSig, r_values,  comp_SNR, r_values_min,
+                r_values_lowest, min_SNR, min_std_reject,
+                thresh_cnn_min, thresh_cnn_lowest, use_cnn, gSig_range)
+
+    return idx_components, idx_components_bad, comp_SNR, r_values, cnn_values
+
+#%%
+def select_components_from_metrics(A, dims, gSig, r_values,  comp_SNR, r_values_min,
+                                   r_values_lowest, min_SNR, min_std_reject,
+                                   thresh_cnn_min, thresh_cnn_lowest, use_cnn, gSig_range, neuron_class = 1):
+    '''
+    '''
+
     idx_components_r = np.where((r_values >= r_values_min))[0]
-    idx_components_raw = np.where(fitness_raw < thresh_fitness_raw)[0]
+    idx_components_raw = np.where(comp_SNR > min_SNR)[0]
 
     idx_components = []
     if use_cnn:
-        neuron_class = 1  # normally 1
-        predictions, _ = evaluate_components_CNN(A, dims, gSig)
+          # normally 1
+        if gSig_range is None:
+            predictions, _ = evaluate_components_CNN(A, dims, gSig)
+            predictions = predictions[:, neuron_class]
+        else:
+            predictions = np.zeros(len(r_values))
+            for size_range in gSig_range:
+                predictions = np.maximum(predictions,
+                                         evaluate_components_CNN(A, dims, size_range)[0][:, neuron_class])
+
+
         idx_components_cnn = np.where(
-            predictions[:, neuron_class] >= thresh_cnn_min)[0]
-        bad_comps = np.where((r_values <= r_values_lowest) | (fitness_raw >= thresh_fitness_raw_reject) | (
-            predictions[:, neuron_class] <= thresh_cnn_lowest))[0]
+            predictions >= thresh_cnn_min)[0]
+        bad_comps = np.where((r_values <= r_values_lowest) | (comp_SNR <= min_std_reject) | (
+            predictions <= thresh_cnn_lowest))[0]
         idx_components = np.union1d(idx_components, idx_components_cnn)
-        cnn_values = predictions[:, 1]
+        cnn_values = predictions
     else:
         bad_comps = np.where((r_values <= r_values_lowest) | (
-            fitness_raw >= thresh_fitness_raw_reject))[0]
+            comp_SNR <= min_std_reject))[0]
         cnn_values = []
 
     idx_components = np.union1d(idx_components, idx_components_r)
     idx_components = np.union1d(idx_components, idx_components_raw)
-    #idx_components = np.union1d(idx_components, idx_components_delta)
     idx_components = np.setdiff1d(idx_components, bad_comps)
     idx_components_bad = np.setdiff1d(
         list(range(len(r_values))), idx_components)
 
-    return idx_components.astype(np.int), idx_components_bad.astype(np.int), comp_SNR, r_values, cnn_values
-
+    return idx_components.astype(np.int), idx_components_bad.astype(np.int), cnn_values
 
 #%%
 
@@ -652,10 +693,8 @@ def estimate_components_quality(traces, Y, A, C, b, f, final_frate=30, Npeaks=10
                 erfc_raw = np.concatenate([erfc_raw, erfc_raw__], axis=0)
                 erfc_delta = np.concatenate([erfc_delta, erfc_delta__], axis=0)
 
-    idx_components_r = np.where(r_values >= r_values_min)[
-        0]  # threshold on space consistency
-    idx_components_raw = np.where(fitness_raw < fitness_min)[
-        0]  # threshold on time variability
+    idx_components_r = np.where(r_values >= r_values_min)[0]     # threshold on space consistency
+    idx_components_raw = np.where(fitness_raw < fitness_min)[0]  # threshold on time variability
     # threshold on time variability (if nonsparse activity)
     idx_components_delta = np.where(fitness_delta < fitness_delta_min)[0]
 
