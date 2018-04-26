@@ -1,4 +1,6 @@
+#!/usr/bin/env python
 #%% test for OFFLINE CNMF
+
 from __future__ import division
 from __future__ import print_function
 from builtins import zip
@@ -22,8 +24,7 @@ try:
         get_ipython().magic('load_ext autoreload')
         get_ipython().magic('autoreload 2')
 except NameError:
-    print('Not IPYTHON')
-    pass
+    print('Not launched under iPython')
 
 import matplotlib
 matplotlib.use('Agg')
@@ -427,7 +428,7 @@ fitness_raw, fitness_delta, erfc_raw, erfc_delta, r_values, significant_samples 
 #%%
 from caiman.components_evaluation import evaluate_components_CNN
 predictions, final_crops = evaluate_components_CNN(
-    A, dims, gSig, model_name='use_cases/CaImAnpaper/cnn_model')
+    A, dims, gSig, model_name='model/cnn_model')
 #%%
 threshold = .95
 from caiman.utils.visualization import matrixMontage

@@ -1,10 +1,12 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
 # -*- coding: utf-8 -*-
+
 """
 Created on Thu Oct 12 10:47:55 2017
 
 @author: agiovann
 """
+
 from __future__ import division
 from __future__ import print_function
 from builtins import zip
@@ -28,8 +30,8 @@ try:
         get_ipython().magic('load_ext autoreload')
         get_ipython().magic('autoreload 2')
 except NameError:
-    print('Not IPYTHON')
-    pass
+    print('Not launched under iPython')
+
 import caiman as cm
 import numpy as np
 import os
@@ -80,7 +82,7 @@ with np.load('/mnt/ceph/neuro/data_minions/ground_truth_components_minions.npz')
 #%% Existing classifier
 
 
-def run_classifier(msks, model_name='use_cases/CaImAnpaper/cnn_model'):
+def run_classifier(msks, model_name='model/cnn_model'):
     json_file = open(model_name + '.json', 'r')
     loaded_model_json = json_file.read()
     json_file.close()

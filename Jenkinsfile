@@ -2,7 +2,7 @@ pipeline {
   agent none
   options {
     disableConcurrentBuilds()
-    timeout(time: 1, unit: 'HOURS')
+    timeout(time: 2, unit: 'HOURS')
   }
   stages {
     stage('test') {
@@ -18,11 +18,16 @@ pipeline {
             CONDA_ENV = "${env.WORKSPACE}/test/${env.STAGE_NAME}"
           }
           steps {
-            sh 'conda env create -q -f environment.yml -p $CONDA_ENV'
+            sh 'conda env create -q -f environment_python2.yml -p $CONDA_ENV'
             sh '''#!/bin/bash -ex
               source $CONDA_ENV/bin/activate $CONDA_ENV
-              python setup.py build_ext -i
-              nosetests
+              pip install .
+              TEMPDIR=$(mktemp -d)
+              export CAIMAN_DATA=$TEMPDIR/caiman_data
+              cd $TEMPDIR
+              caimanmanager.py install
+              nosetests --traverse-namespace caiman
+              caimanmanager.py demotest
             '''
           }
         }
@@ -40,8 +45,13 @@ pipeline {
             sh 'conda env create -q -f environment.yml -p $CONDA_ENV'
             sh '''#!/bin/bash -ex
               source $CONDA_ENV/bin/activate $CONDA_ENV
-              python setup.py build_ext -i
-              nosetests
+              pip install .
+              TEMPDIR=$(mktemp -d)
+              export CAIMAN_DATA=$TEMPDIR/caiman_data
+              cd $TEMPDIR
+              caimanmanager.py install
+              nosetests --traverse-namespace caiman
+              caimanmanager.py demotest
             '''
           }
         }
@@ -54,14 +64,15 @@ pipeline {
             CONDA_ENV = "${env.WORKSPACE}/test/${env.STAGE_NAME}"
           }
           steps {
-            sh '$ANACONDA2/bin/conda env create -q -f environment_mac.yml -p $CONDA_ENV'
+            sh '$ANACONDA2/bin/conda env create -q -f environment_python2.yml -p $CONDA_ENV'
             sh '''#!/bin/bash -ex
               source $CONDA_ENV/bin/activate $CONDA_ENV
-              conda install -q -c conda-forge tensorflow keras
-              python setup.py build_ext -i
-              #nosetests
-              cd caiman/tests
-              nosetests $(for f in test_*.py ; do echo ${f%.py} ; done)
+              pip install .
+              TEMPDIR=$(mktemp -d)
+              export CAIMAN_DATA=$TEMPDIR/caiman_data
+              cd $TEMPDIR
+              caimanmanager.py install
+              nosetests --traverse-namespace caiman
             '''
           }
         }
@@ -77,10 +88,12 @@ pipeline {
             sh '$ANACONDA3/bin/conda env create -q -f environment.yml -p $CONDA_ENV'
             sh '''#!/bin/bash -ex
               source $CONDA_ENV/bin/activate $CONDA_ENV
-              python setup.py build_ext -i
-              #nosetests
-              cd caiman/tests
-              nosetests $(for f in test_*.py ; do echo ${f%.py} ; done)
+              pip install .
+              TEMPDIR=$(mktemp -d)
+              export CAIMAN_DATA=$TEMPDIR/caiman_data
+              cd $TEMPDIR
+              caimanmanager.py install
+              nosetests --traverse-namespace caiman
             '''
           }
         }
@@ -95,8 +108,8 @@ pipeline {
             CONDA_ENV = "${env.WORKSPACE}\\test\\${env.STAGE_NAME}"
           }
           steps {
-            bat '%ANACONDA%\\scripts\\conda env create -q -f environment_mac.yml -p %CONDA_ENV%'
-            bat '%CONDA_ENV%\\scripts\\activate %CONDA_ENV% && python setup.py build_ext -i && nosetests'
+            bat '%ANACONDA%\\scripts\\conda env create -q -f environment_python27.yml -p %CONDA_ENV%'
+            bat '%CONDA_ENV%\\scripts\\activate %CONDA_ENV% && pip install . && caimanmanager.py install && nosetests'
           }
         }
         */
@@ -110,7 +123,7 @@ pipeline {
           }
           steps {
             bat '%ANACONDA%\\scripts\\conda env create -q -f environment.yml -p %CONDA_ENV%'
-            bat '%CONDA_ENV%\\scripts\\activate %CONDA_ENV% && python setup.py build_ext -i && nosetests'
+            bat '%CONDA_ENV%\\scripts\\activate %CONDA_ENV% && pip install . && copy caimanmanager.py %TEMP% && cd %TEMP% && set "CAIMAN_DATA=%TEMP%\\caiman_data" && (if exist caiman_data (rmdir caiman_data /s /q) else (echo "Host is fresh")) && python caimanmanager.py install && python caimanmanager.py test'
           }
         }
       }
@@ -136,7 +149,7 @@ ${BUILD_LOG,maxLines=60}
 		 [$class: 'DevelopersRecipientProvider'],
 	       ], 
 	       replyTo: '$DEFAULT_REPLYTO',
-	       to: 'epnevmatikakis@gmail.com, andrea.giovannucci@gmail.com'
+	       to: 'epnevmatikakis@gmail.com, andrea.giovannucci@gmail.com, dsimon@flatironinstitute.org, pgunn@flatironinstitute.org'
     }
   }
 }

@@ -1,3 +1,5 @@
+#!/usr/bin/env python
+
 # @package demos
 #\brief      for the user/programmer to understand and try the code
 #\details    all of other usefull functions (demos available on jupyter notebook) -*- coding: utf-8 -*-
@@ -9,9 +11,11 @@
 #\date Created on Mon Nov 21 15:53:15 2016
 #\author agiovann
 # toclean
+
 """
 
 """
+
 from __future__ import division
 from __future__ import print_function
 from builtins import zip
@@ -35,8 +39,8 @@ try:
         get_ipython().magic('load_ext autoreload')
         get_ipython().magic('autoreload 2')
 except NameError:
-    print('Not IPYTHON')
-    pass
+    print('Not launched under iPython')
+
 import caiman as cm
 import numpy as np
 import os
@@ -365,7 +369,7 @@ with np.load(os.path.join(os.path.split(fname_new)[0], os.path.split(fname_new)[
 #%%
 from caiman.components_evaluation import evaluate_components_CNN
 predictions, final_crops = evaluate_components_CNN(
-    A, dims, gSig, model_name='use_cases/CaImAnpaper/cnn_model')
+    A, dims, gSig, model_name='model/cnn_model')
 #%%
 cm.movie(final_crops).play(gain=3, magnification=6, fr=5)
 #%%

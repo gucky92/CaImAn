@@ -1,4 +1,6 @@
+#!/usr/bin/env python
 # -*- coding: utf-8 -*-
+
 """
 Function for implementing parallel scalable segmentation of two photon imaging data
 
@@ -114,7 +116,12 @@ def cnmf_patches(args_in):
     slices.insert(0, slice(timesteps))
 
     images = np.reshape(Yr.T, [timesteps] + list(dims), order='F')
-    images = images[slices]
+    if options['patch_params']['in_memory']:
+        images = np.array(images[slices],dtype=np.float32)
+    else:
+        images = images[slices]
+
+    logger.info('file loaded')
 
     if (np.sum(np.abs(np.diff(images.reshape(timesteps, -1).T)))) > 0.1:
 
@@ -133,13 +140,16 @@ def cnmf_patches(args_in):
                         skip_refinement=options['patch_params']['skip_refinement'],
                         options_local_NMF=options['init_params']['options_local_NMF'],
                         normalize_init=options['init_params']['normalize_init'],
+                        s_min=options['temporal_params']['s_min'],
                         remove_very_bad_comps=options['patch_params']['remove_very_bad_comps'],
                         rolling_sum=options['init_params']['rolling_sum'],
                         rolling_length=options['init_params']['rolling_length'],
                         min_corr=options['init_params']['min_corr'], min_pnr=options['init_params']['min_pnr'],
-                        deconvolve_options_init=options['init_params']['deconvolve_options_init'],
                         ring_size_factor=options['init_params']['ring_size_factor'],
-                        center_psf=options['init_params']['center_psf'])
+                        center_psf=options['init_params']['center_psf'],
+                        ssub_B=options['init_params']['ssub_B'],
+                        compute_B_3x=options['init_params']['compute_B_3x'],
+                        init_iter=options['init_params']['init_iter'])
 
         cnm = cnm.fit(images)
         return [idx_, shapes, scipy.sparse.coo_matrix(cnm.A),
@@ -162,17 +172,17 @@ def run_CNMF_patches(file_name, shape, options, rf=16, stride=4, gnb=1, dview=No
      It will then recreate the full frame by listing all the fitted values together
 
     Parameters:
-    ----------        
+    ----------
     file_name: string
-        full path to an npy file (2D, pixels x time) containing the movie        
+        full path to an npy file (2D, pixels x time) containing the movie
 
     shape: tuple of thre elements
-        dimensions of the original movie across y, x, and time 
+        dimensions of the original movie across y, x, and time
 
     options:
         dictionary containing all the parameters for the various algorithms
 
-    rf: int 
+    rf: int
         half-size of the square patch in pixel
 
     stride: int
@@ -310,10 +320,14 @@ def run_CNMF_patches(file_name, shape, options, rf=16, stride=4, gnb=1, dview=No
 
     # INITIALIZING
     nb_patch = options['patch_params']['nb']
-    C_tot = np.zeros((count, T))
-    YrA_tot = np.zeros((count, T))
-    F_tot = np.zeros((num_patches * nb_patch, T))
-    mask = np.zeros(d)
+    C_tot = np.zeros((count, T), dtype=np.float32)
+    if options['init_params']['center_psf']:
+        S_tot = np.zeros((count, T), dtype=np.float32)
+    else:
+         S_tot = None
+    YrA_tot = np.zeros((count, T), dtype=np.float32)
+    F_tot = np.zeros((num_patches * nb_patch, T), dtype=np.float32)
+    mask = np.zeros(d, dtype=np.uint8)
     sn_tot = np.zeros((d))
 
     f_tot, bl_tot, c1_tot, neurons_sn_tot, g_tot, idx_tot, id_patch_tot, shapes_tot = [
@@ -356,6 +370,8 @@ def run_CNMF_patches(file_name, shape, options, rf=16, stride=4, gnb=1, dview=No
                     idx_tot_A.append(idx_)
                     idx_ptr_A.append(len(idx_))
                     C_tot[count, :] = C[ii, :]
+                    if options['init_params']['center_psf']:
+                        S_tot[count, :] = S[ii, :]
                     YrA_tot[count, :] = YrA[ii, :]
                     id_patch_tot.append(patch_id)
                     count += 1
@@ -365,11 +381,14 @@ def run_CNMF_patches(file_name, shape, options, rf=16, stride=4, gnb=1, dview=No
             empty += 1
 
     print('Skipped %d Empty Patch', empty)
-    idx_tot_B = np.concatenate(idx_tot_B)
-    b_tot = np.concatenate(b_tot)
-    idx_ptr_B = np.cumsum(np.array(idx_ptr_B))
-    B_tot = scipy.sparse.csc_matrix(
-        (b_tot, idx_tot_B, idx_ptr_B), shape=(d, count_bgr))
+    if count_bgr > 0:
+        idx_tot_B = np.concatenate(idx_tot_B)
+        b_tot = np.concatenate(b_tot)
+        idx_ptr_B = np.cumsum(np.array(idx_ptr_B))
+        B_tot = scipy.sparse.csc_matrix(
+            (b_tot, idx_tot_B, idx_ptr_B), shape=(d, count_bgr))
+    else:
+        B_tot = scipy.sparse.csc_matrix((d, count_bgr), dtype=np.float32)
 
     idx_tot_A = np.concatenate(idx_tot_A)
     a_tot = np.concatenate(a_tot)
@@ -387,6 +406,7 @@ def run_CNMF_patches(file_name, shape, options, rf=16, stride=4, gnb=1, dview=No
     optional_outputs['c1_tot'] = c1_tot
     optional_outputs['neurons_sn_tot'] = neurons_sn_tot
     optional_outputs['g_tot'] = g_tot
+    optional_outputs['S_tot'] = S_tot
     optional_outputs['idx_tot'] = idx_tot
     optional_outputs['shapes_tot'] = shapes_tot
     optional_outputs['id_patch_tot'] = id_patch_tot
@@ -397,10 +417,15 @@ def run_CNMF_patches(file_name, shape, options, rf=16, stride=4, gnb=1, dview=No
     print("Generating background")
 
     Im = scipy.sparse.csr_matrix(
-        (old_div(1., mask), (np.arange(d), np.arange(d))))
-    A_tot = Im.dot(A_tot)
+        (1. / mask, (np.arange(d), np.arange(d))), dtype=np.float32)
 
-    if low_rank_background is None:
+    if not del_duplicates:
+        A_tot = Im.dot(A_tot)
+
+    if count_bgr == 0:
+        b = None
+        f = None
+    elif low_rank_background is None:
         b = Im.dot(B_tot)
         f = F_tot
         print("Leaving background components intact")
