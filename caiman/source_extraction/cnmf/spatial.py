@@ -24,7 +24,6 @@ from scipy.ndimage.morphology import generate_binary_structure, iterate_structur
 from scipy.ndimage import label, binary_dilation
 from sklearn.decomposition import NMF
 from warnings import warn
-import numpy as np
 import scipy
 import time
 import tempfile
@@ -33,7 +32,7 @@ import shutil
 from ...mmapping import load_memmap, parallel_dot_product
 from scipy.ndimage.filters import median_filter
 from scipy.ndimage.morphology import binary_closing
-from scipy.ndimage.measurements import label
+import cv2
 
 
 def basis_denoising(y, c, boh, sn, id2_, px):
@@ -1356,7 +1355,7 @@ def circular_constraint(img_original):
     cmin = np.min(csub)
     cmax = np.max(csub) + 1
 
-    if (rmax - rmin < 1) or (cmax - cmin < 1):
+    if (rmax - rmin) * (cmax - cmin) <= 1:
         return img
 
     if rmin == 0 and rmax == nr and cmin == 0 and cmax == nc:
@@ -1364,8 +1363,12 @@ def circular_constraint(img_original):
         y0, x0 = np.unravel_index(ind_max, [nr, nc])
         vmax = img[y0, x0]
         x, y = np.meshgrid(np.arange(nc), np.arange(nr))
-        fy, fx = np.gradient(img)
-        ind = ((fx * (x0 - x) + fy * (y0 - y) < 0) & (img < vmax / 2))
+        try:
+            fy, fx = np.gradient(img)
+        except ValueError:
+            f = np.gradient(img.ravel()).reshape(nr, nc)
+            (fy, fx) = (f, 0) if nc == 1 else (0, f)
+        ind = ((fx * (x0 - x) + fy * (y0 - y) < 0) & (img < vmax / 3))
         img[ind] = 0
 
         # # remove isolated pixels
@@ -1377,6 +1380,18 @@ def circular_constraint(img_original):
         img[rmin:rmax, cmin:cmax] = tmp_img
 
     return img
+
+
+def connectivity_constraint(img_original, thr=.01, sz=5):
+    """remove small nonzero pixels and disconnected components"""
+    img = img_original.copy()
+    ai_open = cv2.morphologyEx(img, cv2.MORPH_OPEN, np.ones((sz, sz), np.uint8))
+    tmp = ai_open > img.max() * thr
+    l, _ = label(tmp)
+    img[l != l.ravel()[np.argmax(img)]] = 0
+    return img
+
+
 # %% lars_regression_noise_parallel
 # def basis_denoising(y, c, boh, sn, id2_, px):
 #     if np.size(c) > 0:

@@ -29,12 +29,13 @@ from __future__ import print_function
 from builtins import str
 from builtins import object
 import numpy as np
-from .utilities import CNMFSetParms, update_order, normalize_AC, compute_residuals
+from .utilities import CNMFSetParms, update_order, normalize_AC, compute_residuals, detrend_df_f
 from .pre_processing import preprocess_data
 from .initialization import initialize_components, imblur
 from .merging import merge_components
 from .spatial import update_spatial_components
-from .temporal import update_temporal_components
+from .temporal import update_temporal_components, constrained_foopsi_parallel
+from caiman.components_evaluation import estimate_components_quality_auto, select_components_from_metrics
 from .map_reduce import run_CNMF_patches
 from .oasis import OASIS
 import caiman
@@ -46,6 +47,13 @@ import scipy
 import psutil
 import pylab as pl
 from time import time
+import logging
+import sys
+
+try:
+    cv2.setNumThreads(0)
+except:
+    pass
 
 try:
     profile
@@ -89,7 +97,7 @@ class CNMF(object):
                  center_psf=False, use_dense=True, deconv_flag=True,
                  simultaneously=False, n_refit=0, del_duplicates=False, N_samples_exceptionality=5,
                  max_num_added=1, min_num_trial=2, thresh_CNN_noisy=0.99,
-                 ssub_B=2, compute_B_3x=False, init_iter=2):
+                 ssub_B=2, init_iter=2):
         """
         Constructor of the CNMF method
 
@@ -246,9 +254,6 @@ class CNMF(object):
         ssub_B: int, optional
             downsampleing factor for 1-photon imaging background computation
 
-        compute_B_3x: bool, optional=False,
-            whether to compute background 3x or only 2x for 1-photon imaging
-
         init_iter: int, optional
             number of iterations for 1-photon imaging initialization
 
@@ -345,9 +350,10 @@ class CNMF(object):
                                     rolling_sum=self.rolling_sum,
                                     min_corr=min_corr, min_pnr=min_pnr,
                                     ring_size_factor=ring_size_factor, center_psf=center_psf,
-                                    ssub_B=ssub_B, compute_B_3x=compute_B_3x, init_iter=init_iter)
+                                    ssub_B=ssub_B, init_iter=init_iter)
         self.options['merging']['thr'] = merge_thresh
         self.options['temporal_params']['s_min'] = s_min
+        
 
     def fit(self, images):
         """
@@ -456,7 +462,10 @@ class CNMF(object):
             if self.only_init:  # only return values after initialization
 
                 if self.center_psf:
-                    self.S, self.bl, self.c1, self.neurons_sn, self.g, self.YrA = extra_1p
+                    try:
+                        self.S, self.bl, self.c1, self.neurons_sn, self.g, self.YrA = extra_1p
+                    except:
+                        self.S, self.bl, self.c1, self.neurons_sn, self.g, self.YrA, self.W, self.b0 = extra_1p
                 else:
                     self.YrA = compute_residuals(
                         Yr, self.Ain, self.b_in, self.Cin, self.f_in,
@@ -836,7 +845,8 @@ class CNMF(object):
     @profile
     def fit_next(self, t, frame_in, num_iters_hals=3):
         """
-        This method fits the next frame using the online cnmf algorithm and updates the object.
+        This method fits the next frame using the online cnmf algorithm and
+        updates the object.
 
         Parameters
         ----------
@@ -894,7 +904,7 @@ class CNMF(object):
                           1] = o.get_c_of_last_pool()
 
         #self.mean_buff = self.Yres_buf.mean(0)
-        res_frame = frame - self.Ab.dot(self.noisyC[:self.M, t])
+        res_frame = frame - self.Ab.dot(self.C_on[:self.M, t])
         mn_ = self.mn.copy()
         self.mn = (t-1)/t*self.mn + res_frame/t
         self.vr = (t-1)/t*self.vr + (res_frame - mn_)*(res_frame - self.mn)/t
@@ -1016,7 +1026,7 @@ class CNMF(object):
 
             ccf = self.C_on[:self.M, t - self.minibatch_suff_stat:t -
                             self.minibatch_suff_stat + 1]
-            y = self.Yr_buf.get_last_frames(self.minibatch_suff_stat)[:1]
+            y = self.Yr_buf.get_last_frames(self.minibatch_suff_stat + 1)[:1]
             # much faster: exploit that we only access CY[m, ind_pixels], hence update only these
             for m in range(self.N):
                 self.CY[m + nb_, self.ind_A[m]] *= (1 - 1. / t)
@@ -1201,7 +1211,7 @@ class CNMF(object):
         self.b = self.b * nB_inv_mat
         self.f = nB_mat * self.f
 
-    def view_patches(self, Yr, dims, img=None, idx = None):
+    def view_patches(self, Yr, dims, img=None, idx=None):
         """view spatial and temporal components interactively
 
          Parameters:
@@ -1213,7 +1223,8 @@ class CNMF(object):
                  dimensions of the FOV
 
          img :   np.ndarray
-                 background image for contour plotting. Default is the mean image of all spatial components (d1 x d2)
+                 background image for contour plotting. Default is the mean 
+                 image of all spatial components (d1 x d2)
 
         """
         if 'csc_matrix' not in str(type(self.A)):
@@ -1238,6 +1249,323 @@ class CNMF(object):
             caiman.utils.visualization.view_patches_bar(Yr, self.A.tocsc()[:,idx], self.C[idx], self.b, self.f, dims[
                                                     0], dims[1], YrA=self.YrA[idx], img=img)
 
+    def detrend_df_f(self, quantileMin=8, frames_window=500,
+                     flag_auto=True, use_fast=False, use_residuals=True):
+        """Computes DF/F normalized fluorescence for the extracted traces. See
+        caiman.source.extraction.utilities.detrend_df_f for details
 
-def scale(y):
-    return (y - np.mean(y)) / (np.max(y) - np.min(y))
+        Parameters:
+        -----------
+        quantile_min: float
+            quantile used to estimate the baseline (values in [0,100])
+
+        frames_window: int
+            number of frames for computing running quantile
+
+        flag_auto: bool
+            flag for determining quantile automatically (different for each
+            trace)
+
+        use_fast: bool
+            flag for using approximate fast percentile filtering
+
+        use_residuals: bool
+            flag for using non-deconvolved traces in DF/F calculation
+
+        Returns:
+        --------
+        self: CNMF object
+            self.F_dff contains the DF/F normalized traces
+        """
+
+        if self.C is None:
+            logging.warning("There are no components for DF/F extraction!")
+            return self
+
+        if use_residuals:
+            R = self.YrA
+        else:
+            R = None
+
+        self.F_dff = detrend_df_f(self.A, self.b, self.C, self.f, R,
+                                  quantileMin=quantileMin,
+                                  frames_window=frames_window,
+                                  flag_auto=flag_auto, use_fast=use_fast)
+        return self
+
+    def deconvolve(self, p=None, method=None, bas_nonneg=None,
+                   noise_method=None, optimize_g=0, s_min=None, **kwargs):
+        """Performs deconvolution on already extracted traces using
+        constrained foopsi.
+        """
+
+        p = self.p if p is None else p
+        method = self.method_deconvolution if method is None else method
+        bas_nonneg = (self.options['temporal_params']['bas_nonneg']
+                      if bas_nonneg is None else bas_nonneg)
+        noise_method = (self.options['temporal_params']['noise_method']
+                        if noise_method is None else noise_method)
+        s_min = self.s_min if s_min is None else s_min
+
+        F = self.C + self.YrA
+        args = dict()
+        args['p'] = p
+        args['method'] = method
+        args['bas_nonneg'] = bas_nonneg
+        args['noise_method'] = noise_method
+        args['s_min'] = s_min
+        args['optimize_g'] = optimize_g
+        args['noise_range'] = self.options['temporal_params']['noise_range']
+        args['fudge_factor'] = self.options['temporal_params']['fudge_factor']
+
+        args_in = [(F[jj], None, jj, None, None, None, None,
+                    args) for jj in range(F.shape[0])]
+
+        if 'multiprocessing' in str(type(self.dview)):
+            results = self.dview.map_async(
+                constrained_foopsi_parallel, args_in).get(4294967)
+        elif self.dview is not None:
+            results = self.dview.map_sync(constrained_foopsi_parallel, args_in)
+        else:
+            results = list(map(constrained_foopsi_parallel, args_in))
+
+        if sys.version_info >= (3, 0):
+            results = list(zip(*results))
+        else:  # python 2
+            results = zip(*results)
+
+        order = list(results[7])
+        self.C = np.stack([results[0][i] for i in order])
+        self.S = np.stack([results[1][i] for i in order])
+        self.bl = [results[3][i] for i in order]
+        self.c1 = [results[4][i] for i in order]
+        self.g = [results[5][i] for i in order]
+        self.neuron_sn = [results[6][i] for i in order]
+        self.lam = [results[8][i] for i in order]
+        self.YrA = F - self.C
+        return self
+
+    def evaluate_components(self, imgs, fr=None, decay_time=None, min_SNR=None,
+                            rval_thr=None, use_cnn=None, min_cnn_thr=None):
+        """Computes the quality metrics for each component and stores the
+        indeces of the components that pass user specified thresholds. The
+        various thresholds and parameters can be passed as inputs. If left
+        empty then they are read from self.options['quality']
+        Parameters:
+        -----------
+        imgs: np.array (possibly memory mapped, t,x,y[,z])
+            Imaging data
+
+        fr: float
+            Imaging rate
+
+        decay_time: float
+            length of decay of typical transient (in seconds)
+
+        min_SNR: float
+            trace SNR threshold
+
+        rval_thr: float
+            space correlation threshold
+
+        use_cnn: bool
+            flag for using the CNN classifier
+
+        min_cnn_thr: float
+            CNN classifier threshold
+
+        Returns:
+        --------
+        self: CNMF object
+            self.idx_components: np.array
+                indeces of accepted components
+            self.idx_components_bad: np.array
+                indeces of rejected components
+            self.SNR_comp: np.array
+                SNR values for each temporal trace
+            self.r_values: np.array
+                space correlation values for each component
+            self.cnn_preds: np.array
+                CNN classifier values for each component
+        """
+        dims = imgs.shape[1:]
+        fr = self.options['quality']['fr'] if fr is None else fr
+        decay_time = (self.options['quality']['decay_time']
+                      if decay_time is None else decay_time)
+        min_SNR = (self.options['quality']['min_SNR']
+                   if min_SNR is None else min_SNR)
+        rval_thr = (self.options['quality']['rval_thr']
+                    if rval_thr is None else rval_thr)
+        use_cnn = (self.options['quality']['use_cnn']
+                   if use_cnn is None else use_cnn)
+        min_cnn_thr = (self.options['quality']['min_cnn_thr']
+                       if min_cnn_thr is None else min_cnn_thr)
+
+        idx_components, idx_components_bad, SNR_comp, r_values, cnn_preds = \
+        estimate_components_quality_auto(imgs, self.A, self.C, self.b, self.f,
+                                         self.YrA, fr, decay_time, self.gSig,
+                                         dims, dview=self.dview,
+                                         min_SNR=min_SNR,
+                                         r_values_min=rval_thr,
+                                         use_cnn=use_cnn,
+                                         thresh_cnn_min=min_cnn_thr)
+        self.idx_components = idx_components
+        self.idx_components_bad = idx_components_bad
+        self.SNR_comp = SNR_comp
+        self.r_values = r_values
+        self.cnn_preds = cnn_preds
+
+        return self
+
+    def filter_components(self, imgs, fr=None, decay_time=None, min_SNR=None,
+                          SNR_lowest=None, rval_thr=None, rval_lowest=None,
+                          use_cnn=None, min_cnn_thr=None,
+                          cnn_lowest=None, gSig_range=None):
+        """Filters components based on given thresholds without re-computing
+        the quality metrics. If the quality metrics are not present then it
+        calls self.evaluate components.
+        Parameters:
+        -----------
+        imgs: np.array (possibly memory mapped, t,x,y[,z])
+            Imaging data
+
+        fr: float
+            Imaging rate
+
+        decay_time: float
+            length of decay of typical transient (in seconds)
+
+        min_SNR: float
+            trace SNR threshold
+
+        SNR_lowest: float
+            minimum required trace SNR
+
+        rval_thr: float
+            space correlation threshold
+
+        rval_lowest: float
+            minimum required space correlation
+
+        use_cnn: bool
+            flag for using the CNN classifier
+
+        min_cnn_thr: float
+            CNN classifier threshold
+
+        cnn_lowest: float
+            minimum required CNN threshold
+
+        gSig_range: list
+            gSig scale values for CNN classifier
+
+        Returns:
+        --------
+        self: CNMF object
+            self.idx_components: np.array
+                indeces of accepted components
+            self.idx_components_bad: np.array
+                indeces of rejected components
+            self.SNR_comp: np.array
+                SNR values for each temporal trace
+            self.r_values: np.array
+                space correlation values for each component
+            self.cnn_preds: np.array
+                CNN classifier values for each component
+        """
+        dims = imgs.shape[1:]
+        fr = self.options['quality']['fr'] if fr is None else fr
+        decay_time = (self.options['quality']['decay_time']
+                      if decay_time is None else decay_time)
+        min_SNR = (self.options['quality']['min_SNR']
+                   if min_SNR is None else min_SNR)
+        SNR_lowest = (self.options['quality']['SNR_lowest']
+                      if SNR_lowest is None else SNR_lowest)
+        rval_thr = (self.options['quality']['rval_thr']
+                    if rval_thr is None else rval_thr)
+        rval_lowest = (self.options['quality']['rval_lowest']
+                       if rval_lowest is None else rval_lowest)
+        use_cnn = (self.options['quality']['use_cnn']
+                   if use_cnn is None else use_cnn)
+        min_cnn_thr = (self.options['quality']['min_cnn_thr']
+                       if min_cnn_thr is None else min_cnn_thr)
+        cnn_lowest = (self.options['quality']['cnn_lowest']
+                      if cnn_lowest is None else cnn_lowest)
+        gSig_range = (self.options['quality']['gSig_range']
+                      if gSig_range is None else gSig_range)
+
+        if not hasattr(self, 'idx_components'):
+            self.evaluate_components(imgs, fr=fr, decay_time=decay_time,
+                                     min_SNR=min_SNR, rval_thr=rval_thr,
+                                     use_cnn=use_cnn,
+                                     min_cnn_thr=min_cnn_thr)
+
+        self.idx_components, self.idx_components_bad, self.cnn_preds = \
+        select_components_from_metrics(self.A, dims, self.gSig, self.r_values,
+                                       self.SNR_comp, r_values_min=rval_thr,
+                                       r_values_lowest=rval_lowest,
+                                       min_SNR=min_SNR,
+                                       min_SNR_reject=SNR_lowest,
+                                       thresh_cnn_min=min_cnn_thr,
+                                       thresh_cnn_lowest=cnn_lowest,
+                                       use_cnn=use_cnn, gSig_range=gSig_range,
+                                       predictions=self.cnn_preds)
+
+        return self
+
+    def play_movie(self, imgs, q_max=99.75, q_min=2, gain_res=1,
+                   magnification=1, include_bck=True,
+                   frame_range=slice(None)):
+        """Displays a movie with three panels (original data (left panel),
+        reconstructed data (middle panel), residual (right panel))
+        Parameters:
+        -----------
+        imgs: np.array (possibly memory mapped, t,x,y[,z])
+            Imaging data
+
+        q_max: float (values in [0, 100])
+            percentile for maximum plotting value
+
+        q_min: float (values in [0, 100])
+            percentile for minimum plotting value
+
+        gain_res: float
+            amplification factor for residual movie
+
+        magnification: float
+            magnification factor for whole movie
+
+        include_bck: bool
+            flag for including background in original and reconstructed movie
+
+        frame_rage: range or slice or list
+            display only a subset of frames
+
+
+        Returns:
+        --------
+        self (to stop the movie press 'q')
+        """
+        dims = imgs.shape[1:]
+        if 'movie' not in str(type(imgs)):
+            imgs = caiman.movie(imgs)
+        Y_rec = self.A.dot(self.C[:, frame_range])
+        Y_rec = Y_rec.reshape(dims + (-1,), order='F')
+        Y_rec = Y_rec.transpose([2, 0, 1])
+        if self.gnb == -1 or self.gnb > 0:
+            B = self.b.dot(self.f[:, frame_range])
+            if 'matrix' in str(type(B)):
+                B = B.toarray()
+            B = B.reshape(dims + (-1,), order='F').transpose([2, 0, 1])
+        elif self.gnb == -2:
+            B = self.W.dot(imgs[frame_range] - self.A.dot(self.C[:, frame_range]))
+            B = B.reshape(dims + (-1,), order='F').transpose([2, 0, 1])
+        else:
+            B = np.zeros_like(Y_rec)
+        imgs = imgs[:, self.border_pix:-self.border_pix, self.border_pix:-self.border_pix]
+        B = B[:, self.border_pix:-self.border_pix, self.border_pix:-self.border_pix]
+        Y_rec = Y_rec[:, self.border_pix:-self.border_pix, self.border_pix:-self.border_pix]
+        Y_res = imgs[frame_range] - Y_rec - B
+        caiman.concatenate((imgs[frame_range] - (not include_bck)*B, Y_rec + include_bck*B, Y_res*gain_res), axis=2).play(q_min=q_min, q_max=q_max, magnification=magnification)
+
+        return self

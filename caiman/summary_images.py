@@ -24,8 +24,12 @@ from builtins import range
 import numpy as np
 from scipy.ndimage.filters import convolve
 import cv2
-import itertools
 from caiman.source_extraction.cnmf.pre_processing import get_noise_fft
+
+#try:
+#    cv2.setNumThreads(0)
+#except:
+#    pass
 #%%
 
 
@@ -82,7 +86,7 @@ def max_correlation_image(Y, bin_size=1000, eight_neighbours=True, swap_dim=True
 
 
 #%%
-def local_correlations_fft(Y, eight_neighbours=True, swap_dim=True, opencv=True):
+def local_correlations_fft(Y, eight_neighbours=True, swap_dim=True, opencv=True, rolling_window = None):
     """Computes the correlation image for the input dataset Y using a faster FFT based method
 
     Parameters:
@@ -114,10 +118,23 @@ def local_correlations_fft(Y, eight_neighbours=True, swap_dim=True, opencv=True)
             Y, tuple(np.hstack((Y.ndim - 1, list(range(Y.ndim))[:-1]))))
 
     Y = Y.astype('float32')
-    Y -= np.mean(Y, axis=0)
-    Ystd = np.std(Y, axis=0)
-    Ystd[Ystd == 0] = np.inf
-    Y /= Ystd
+    if rolling_window is None:
+        Y -= np.mean(Y, axis=0)
+        Ystd = np.std(Y, axis=0)
+        Ystd[Ystd == 0] = np.inf
+        Y /= Ystd
+    else:
+        Ysum = np.cumsum(Y, axis=0)
+        Yrm = (Ysum[rolling_window:] - Ysum[:-rolling_window])/rolling_window
+        Y[:rolling_window] -= Yrm[0]
+        Y[rolling_window:] -= Yrm
+        del Yrm, Ysum
+        Ystd = np.cumsum(Y**2, axis=0)
+        Yrst = np.sqrt((Ystd[rolling_window:] - Ystd[:-rolling_window])/rolling_window)
+        Yrst[Yrst == 0] = np.inf
+        Y[:rolling_window] /= Yrst[0]
+        Y[rolling_window:] /= Yrst
+        del Ystd, Yrst
 
     if Y.ndim == 4:
         if eight_neighbours:
@@ -135,20 +152,29 @@ def local_correlations_fft(Y, eight_neighbours=True, swap_dim=True, opencv=True)
             sz = np.array([[0, 1, 0], [1, 0, 1], [0, 1, 0]], dtype='float32')
 
     if opencv and Y.ndim == 3:
-        Yconv = Y.copy()
-        for idx, img in enumerate(Yconv):
-            Yconv[idx] = cv2.filter2D(img, -1, sz, borderType=0)
+        Yconv = np.stack([cv2.filter2D(img, -1, sz, borderType=0) for img in Y])
         MASK = cv2.filter2D(
             np.ones(Y.shape[1:], dtype='float32'), -1, sz, borderType=0)
     else:
         Yconv = convolve(Y, sz[np.newaxis, :], mode='constant')
         MASK = convolve(
             np.ones(Y.shape[1:], dtype='float32'), sz, mode='constant')
-    Cn = np.mean(Yconv * Y, axis=0) / MASK
+
+    YYconv = Yconv*Y
+    del Y, Yconv
+    if rolling_window is None:
+        Cn = np.mean(YYconv, axis=0) / MASK
+    else:
+        YYconv_cs = np.cumsum(YYconv, axis=0)
+        del YYconv
+        YYconv_rm = (YYconv_cs[rolling_window:] - YYconv_cs[:-rolling_window])/rolling_window
+        del YYconv_cs
+        Cn = YYconv_rm / MASK
+
     return Cn
 
 
-def local_correlations(Y, eight_neighbours=True, swap_dim=True):
+def local_correlations(Y, eight_neighbours=True, swap_dim=True, order_mean=1):
     """Computes the correlation image for the input dataset Y
 
     Parameters:
@@ -182,16 +208,26 @@ def local_correlations(Y, eight_neighbours=True, swap_dim=True):
     rho_h = np.mean(np.multiply(w_mov[:, :-1, :], w_mov[:, 1:, :]), axis=0)
     rho_w = np.mean(np.multiply(w_mov[:, :, :-1], w_mov[:, :, 1:]), axis=0)
 
-    rho[:-1, :] = rho[:-1, :] + rho_h
-    rho[1:, :] = rho[1:, :] + rho_h
-    rho[:, :-1] = rho[:, :-1] + rho_w
-    rho[:, 1:] = rho[:, 1:] + rho_w
+    if order_mean == 0:
+        rho = np.ones(np.shape(Y)[1:])
+        rho_h = rho_h
+        rho_w = rho_w
+        rho[:-1, :] = rho[:-1, :]*rho_h
+        rho[1:, :] = rho[1:, :]*rho_h
+        rho[:, :-1] = rho[:, :-1]*rho_w
+        rho[:, 1:] = rho[:, 1:]*rho_w
+    else:
+        rho[:-1, :] = rho[:-1, :] + rho_h**(order_mean)
+        rho[1:, :] = rho[1:, :] + rho_h**(order_mean)
+        rho[:, :-1] = rho[:, :-1] + rho_w**(order_mean)
+        rho[:, 1:] = rho[:, 1:] + rho_w**(order_mean)
 
     if Y.ndim == 4:
         rho_d = np.mean(np.multiply(
             w_mov[:, :, :, :-1], w_mov[:, :, :, 1:]), axis=0)
         rho[:, :, :-1] = rho[:, :, :-1] + rho_d
         rho[:, :, 1:] = rho[:, :, 1:] + rho_d
+
         neighbors = 6 * np.ones(np.shape(Y)[1:])
         neighbors[0] = neighbors[0] - 1
         neighbors[-1] = neighbors[-1] - 1
@@ -206,10 +242,19 @@ def local_correlations(Y, eight_neighbours=True, swap_dim=True):
                 w_mov[:, 1:, :-1], w_mov[:, :-1, 1:, ]), axis=0)
             rho_d2 = np.mean(np.multiply(
                 w_mov[:, :-1, :-1], w_mov[:, 1:, 1:, ]), axis=0)
-            rho[:-1, :-1] = rho[:-1, :-1] + rho_d2
-            rho[1:, 1:] = rho[1:, 1:] + rho_d1
-            rho[1:, :-1] = rho[1:, :-1] + rho_d1
-            rho[:-1, 1:] = rho[:-1, 1:] + rho_d2
+
+            if order_mean == 0:
+                rho_d1 = rho_d1
+                rho_d2 = rho_d2
+                rho[:-1, :-1] = rho[:-1, :-1]*rho_d2
+                rho[1:, 1:] = rho[1:, 1:]*rho_d1
+                rho[1:, :-1] = rho[1:, :-1]*rho_d1
+                rho[:-1, 1:] = rho[:-1, 1:]*rho_d2
+            else:
+                rho[:-1, :-1] = rho[:-1, :-1] + rho_d2**(order_mean)
+                rho[1:, 1:] = rho[1:, 1:] + rho_d1**(order_mean)
+                rho[1:, :-1] = rho[1:, :-1] + rho_d1**(order_mean)
+                rho[:-1, 1:] = rho[:-1, 1:] + rho_d2**(order_mean)
 
             neighbors = 8 * np.ones(np.shape(Y)[1:3])
             neighbors[0, :] = neighbors[0, :] - 3
@@ -227,12 +272,15 @@ def local_correlations(Y, eight_neighbours=True, swap_dim=True):
             neighbors[:, 0] = neighbors[:, 0] - 1
             neighbors[:, -1] = neighbors[:, -1] - 1
 
-    rho = np.divide(rho, neighbors)
+    if order_mean == 0:
+        rho = np.power(rho, 1./neighbors)
+    else:
+        rho = np.power(np.divide(rho, neighbors),1/order_mean)
 
     return rho
 
 
-def correlation_pnr(Y, gSig=None, center_psf=True, swap_dim=True):
+def correlation_pnr(Y, gSig=None, center_psf=True, swap_dim=True, background_filter='disk'):
     """
     compute the correlation image and the peak-to-noise ratio (PNR) image.
     If gSig is provided, then spatially filtered the video.
@@ -269,14 +317,23 @@ def correlation_pnr(Y, gSig=None, center_psf=True, swap_dim=True):
     if gSig:
         if not isinstance(gSig, list):
             gSig = [gSig, gSig]
-        ksize = tuple([int(3 * i / 2) * 2 + 1 for i in gSig])
-        # create a spatial filter for removing background
-        # psf = gen_filter_kernel(width=ksize, sigma=gSig, center=center_psf)
+        ksize = tuple([int(2 * i) * 2 + 1 for i in gSig])
 
         if center_psf:
-            for idx, img in enumerate(data_filtered):
-                data_filtered[idx, ] = cv2.GaussianBlur(img, ksize=ksize, sigmaX=gSig[0], sigmaY=gSig[1], borderType=1) \
-                    - cv2.boxFilter(img, ddepth=-1, ksize=ksize, borderType=1)
+            if background_filter == 'box':
+                for idx, img in enumerate(data_filtered):
+                    data_filtered[idx, ] = cv2.GaussianBlur(
+                        img, ksize=ksize, sigmaX=gSig[0], sigmaY=gSig[1], borderType=1) \
+                        - cv2.boxFilter(img, ddepth=-1, ksize=ksize, borderType=1)
+            else:
+                psf = cv2.getGaussianKernel(ksize[0], gSig[0], cv2.CV_32F).dot(
+                    cv2.getGaussianKernel(ksize[1], gSig[1], cv2.CV_32F).T)
+                ind_nonzero = psf >= psf[0].max()
+                psf -= psf[ind_nonzero].mean()
+                psf[~ind_nonzero] = 0
+                for idx, img in enumerate(data_filtered):
+                    data_filtered[idx, ] = cv2.filter2D(img, -1, psf, borderType=1)
+
             # data_filtered[idx, ] = cv2.filter2D(img, -1, psf, borderType=1)
         else:
             for idx, img in enumerate(data_filtered):
@@ -284,10 +341,9 @@ def correlation_pnr(Y, gSig=None, center_psf=True, swap_dim=True):
                     img, ksize=ksize, sigmaX=gSig[0], sigmaY=gSig[1], borderType=1)
 
     # compute peak-to-noise ratio
-    data_filtered -= np.mean(data_filtered, axis=0)
+    data_filtered -= data_filtered.mean(axis=0)
     data_max = np.max(data_filtered, axis=0)
-    data_std = get_noise_fft(data_filtered.transpose())[0].transpose()
-    # data_std = get_noise(data_filtered, method='diff2_med')
+    data_std = get_noise_fft(data_filtered.T, noise_method='mean')[0].T
     pnr = np.divide(data_max, data_std)
     pnr[pnr < 0] = 0
 
