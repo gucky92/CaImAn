@@ -11,7 +11,7 @@ dependencies:
 - ipython
 - ipyparallel
 - jupyter
-- keras
+- keras=2.1.5
 - matplotlib=2.0.2
 - nose
 - numpy
@@ -24,3 +24,4 @@ dependencies:
 - tifffile
 - tqdm
 - tornado=4.5
+- pims

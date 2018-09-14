@@ -42,9 +42,16 @@ import pickle as cpk
 from scipy.io import loadmat
 from matplotlib import animation
 import pylab as pl
+import tifffile
 from skimage.external.tifffile import imread
 from tqdm import tqdm
 from . import timeseries
+
+try:
+    cv2.setNumThreads(0)
+except:
+    pass
+
 try:
     import sima
     HAS_SIMA = True
@@ -231,7 +238,7 @@ class movie(ts.timeseries):
         T, d1, d2 = np.shape(self)
         num_windows = np.int(old_div(T, window))
         num_frames = num_windows * window
-        return np.median(np.mean(np.reshape(self[:num_frames], (window, num_windows, d1, d2)), axis=0), axis=0)
+        return np.nanmedian(np.nanmean(np.reshape(self[:num_frames], (window, num_windows, d1, d2)), axis=0), axis=0)
 
     def extract_shifts(self, max_shift_w=5, max_shift_h=5, template=None, method='opencv'):
         """
@@ -730,7 +737,7 @@ class movie(ts.timeseries):
 
         return mask
 
-    def local_correlations(self, eight_neighbours=False, swap_dim=True, frames_per_chunk=1500):
+    def local_correlations(self, eight_neighbours=False, swap_dim=True, frames_per_chunk=1500, order_mean=1):
         """Computes the correlation image for the input dataset Y
 
             Parameters:
@@ -757,7 +764,7 @@ class movie(ts.timeseries):
         Cn = np.zeros(self.shape[1:])
         if T <= 3000:
             Cn = si.local_correlations(
-                np.array(self), eight_neighbours=eight_neighbours, swap_dim=swap_dim)
+                np.array(self), eight_neighbours=eight_neighbours, swap_dim=swap_dim, order_mean=order_mean)
         else:
 
             n_chunks = T // frames_per_chunk
@@ -765,7 +772,7 @@ class movie(ts.timeseries):
                 print('number of chunks:' + str(jj) + ' frames: ' +
                       str([mv * frames_per_chunk, (mv + 1) * frames_per_chunk]))
                 rho = si.local_correlations(np.array(self[mv * frames_per_chunk:(mv + 1) * frames_per_chunk]),
-                                            eight_neighbours=eight_neighbours, swap_dim=swap_dim)
+                                            eight_neighbours=eight_neighbours, swap_dim=swap_dim, order_mean=order_mean)
                 Cn = np.maximum(Cn, rho)
                 pl.imshow(Cn, cmap='gray')
                 pl.pause(.1)
@@ -773,7 +780,7 @@ class movie(ts.timeseries):
             print('number of chunks:' + str(n_chunks - 1) +
                   ' frames: ' + str([(n_chunks - 1) * frames_per_chunk, T]))
             rho = si.local_correlations(np.array(self[(n_chunks - 1) * frames_per_chunk:]), eight_neighbours=eight_neighbours,
-                                        swap_dim=swap_dim)
+                                        swap_dim=swap_dim, order_mean=order_mean)
             Cn = np.maximum(Cn, rho)
             pl.imshow(Cn, cmap='gray')
             pl.pause(.1)
@@ -1009,13 +1016,29 @@ class movie(ts.timeseries):
         pl.imshow(zp, cmap=cmap, aspect=aspect, **kwargs)
         return zp
 
-    def local_correlations_movie(self, window=10):
+
+
+    def local_correlations_movie(self, file_name = None, window=10, swap_dim=True, eight_neighbours=True, order_mean = 1, dview = None):
         T, _, _ = self.shape
-        return movie(np.concatenate([self[j:j + window, :, :].local_correlations(
-            eight_neighbours=True)[np.newaxis, :, :] for j in range(T - window)], axis=0), fr=self.fr)
+        params = [[file_name,range(j,j + window), eight_neighbours, swap_dim, order_mean] for j in range(T - window)]
+        if dview is None:
+            parallel_result = [self[j:j + window, :, :].local_correlations(
+                    eight_neighbours=True,swap_dim=swap_dim, order_mean=order_mean)[np.newaxis, :, :] for j in range(T - window)]
+        else:
+            if 'multiprocessing' in str(type(dview)):
+                parallel_result = dview.map_async(
+                        local_correlations_movie_parallel, params).get(4294967)
+            else:
+                parallel_result = dview.map_sync(
+                    local_correlations_movie_parallel, params)
+                dview.results.clear()
+
+        mm = movie(np.concatenate(parallel_result, axis=0),fr=self.fr)
+        return mm
+
 
     def play(self, gain=1, fr=None, magnification=1, offset=0, interpolation=cv2.INTER_LINEAR,
-             backend='opencv', do_loop=False, bord_px=None):
+             backend='opencv', do_loop=False, bord_px=None, q_max=100, q_min = 0, plot_text = False):
         """
         Play the movie using opencv
 
@@ -1036,14 +1059,22 @@ class movie(ts.timeseries):
             print('*** WARNING *** SPEED MIGHT BE LOW. USE opencv backend if available')
 
         gain *= 1.
-        maxmov = np.nanmax(self)
+        if q_max < 100:
+            maxmov = np.nanpercentile(self[0:10], q_max)
+        else:
+            maxmov = np.nanmax(self)
+
+        if q_min > 0:
+            minmov = np.nanpercentile(self[0:10], q_min)
+        else:
+            minmov = np.nanmin(self)
 
         if backend == 'pylab':
             pl.ion()
             fig = pl.figure(1)
             ax = fig.add_subplot(111)
             ax.set_title("Play Movie")
-            im = ax.imshow((offset + self[0]) * gain / maxmov, cmap=pl.cm.gray,
+            im = ax.imshow((offset + self[0] - minmov) * gain / (maxmov - minmov + offset), cmap=pl.cm.gray,
                            vmin=0, vmax=1, interpolation='none')  # Blank starting image
             fig.show()
             im.axes.figure.canvas.draw()
@@ -1082,8 +1113,15 @@ class movie(ts.timeseries):
                     if magnification != 1:
                         frame = cv2.resize(
                             frame, None, fx=magnification, fy=magnification, interpolation=interpolation)
+                    frame = (offset + frame - minmov) * gain /(maxmov - minmov)
 
-                    cv2.imshow('frame', (offset + frame) * gain / maxmov)
+                    if plot_text == True:
+                        text_width, text_height = cv2.getTextSize('Frame = ' + str(iddxx), fontFace=5, fontScale = 0.8, thickness=1)[0]
+                        cv2.putText(frame, 'Frame = ' + str(iddxx), ((frame.shape[1] - text_width) // 2,
+                                    frame.shape[0] - (text_height + 5)), fontFace=5, fontScale=0.8, color=(255, 255, 255), thickness=1)
+
+                    cv2.imshow('frame', frame)
+
                     if cv2.waitKey(int(1. / fr * 1000)) & 0xFF == ord('q'):
                         looping = False
                         terminated = True
@@ -1113,6 +1151,8 @@ class movie(ts.timeseries):
 
             if do_loop:
                 looping = True
+            else:
+                looping = False
 
         if backend == 'opencv':
             cv2.waitKey(100)
@@ -1122,7 +1162,9 @@ class movie(ts.timeseries):
 
 
 
-def load(file_name,fr=30,start_time=0,meta_data=None,subindices=None,shape=None, var_name_hdf5 = 'mov', in_memory = False, is_behavior = False, bottom=0, top=0, left=0, right=0, channel = None):
+def load(file_name,fr=30,start_time=0,meta_data=None,subindices=None,shape=None,
+         var_name_hdf5 = 'mov', in_memory = False, is_behavior = False, bottom=0,
+         top=0, left=0, right=0, channel = None, outtype=np.float32):
     """
     load movie from file. SUpports a variety of formats. tif, hdf5, npy and memory mapped. Matlab is experimental.
 
@@ -1154,7 +1196,7 @@ def load(file_name,fr=30,start_time=0,meta_data=None,subindices=None,shape=None,
 
     Returns:
     -------
-    mov: calblitz.movie
+    mov: caiman.movie
 
     Raise:
     -----
@@ -1175,7 +1217,7 @@ def load(file_name,fr=30,start_time=0,meta_data=None,subindices=None,shape=None,
 
         return load_movie_chain(file_name,fr=fr, start_time=start_time,
                      meta_data=meta_data, subindices=subindices,
-                     bottom=bottom, top=top, left=left, right=right, channel = channel)
+                     bottom=bottom, top=top, left=left, right=right, channel = channel, outtype=outtype)
 
     if bottom != 0:
         raise Exception('top bottom etc... not supported for single movie input')
@@ -1187,24 +1229,27 @@ def load(file_name,fr=30,start_time=0,meta_data=None,subindices=None,shape=None,
         _, extension = os.path.splitext(file_name)[:2]
 
         if extension == '.tif' or extension == '.tiff':  # load avi file
-            if subindices is not None:
-                if type(subindices) is list:
-                    input_arr = imread(file_name)[
-                        subindices[0], subindices[1], subindices[2]]
-                elif type(subindices) is range:
-                    subidx = slice(subindices.start, subindices.stop,
-                                   subindices.step)
-                    input_arr = imread(file_name)[subidx]
+            with tifffile.TiffFile(file_name) as tffl:
+                if subindices is not None:
+                    if type(subindices) is list:
+                        input_arr  = tffl.asarray(key=subindices[0])[:, subindices[1], subindices[2]]
+                    else:
+                        input_arr  = tffl.asarray(key=subindices)
+
+#                    elif type(subindices) is range:
+#                        subidx = slice(subindices.start, subindices.stop,
+#                                       subindices.step)
+#                        input_arr = imread(file_name)[subidx]
+#                    else:
+#                        input_arr = imread(file_name)[subindices]
                 else:
-                    input_arr = imread(file_name)[subindices]
-            else:
-                input_arr = imread(file_name)
-            input_arr = np.squeeze(input_arr)
+                    input_arr = tffl.asarray()
+
+                input_arr = np.squeeze(input_arr)
 
         elif extension == '.avi':  # load avi file
-            if subindices is not None:
-                raise Exception('Subindices not implemented')
             cap = cv2.VideoCapture(file_name)
+
             try:
                 length = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
                 width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
@@ -1215,15 +1260,62 @@ def load(file_name,fr=30,start_time=0,meta_data=None,subindices=None,shape=None,
                 width = int(cap.get(cv2.cv.CV_CAP_PROP_FRAME_WIDTH))
                 height = int(cap.get(cv2.cv.CV_CAP_PROP_FRAME_HEIGHT))
 
-            input_arr = np.zeros((length, height, width), dtype=np.uint8)
-            counter = 0
-            while True:
-                # Capture frame-by-frame
-                ret, frame = cap.read()
-                if not ret:
-                    break
-                input_arr[counter] = frame[:, :, 0]
-                counter = counter + 1
+            cv_failed = False
+            dims = [length, height, width]
+            if length == 0 or width == 0 or height == 0: #CV failed to load
+                cv_failed = True
+            if subindices is not None:
+                if type(subindices) is not list:
+                    subindices = [subindices]
+                for ind, sb in enumerate(subindices):
+                    if type(sb) is range:
+                        subindices[ind] = np.r_[sb]
+                        dims[ind] = subindices[ind].shape[0]
+                    elif type(sb) is slice:
+                        if sb.start is None:
+                            sb = slice(0, sb.stop, sb.step)
+                        if sb.stop is None:
+                            sb = slice(sb.start, dims[ind], sb.step)
+                        subindices[ind] = np.r_[sb]
+                        dims[ind] = subindices[ind].shape[0]
+                    elif type(sb) is np.ndarray:
+                        dims[ind] = sb.shape[0]
+
+                start_frame = subindices[0][0]
+            else:
+                subindices = [np.r_[range(dims[0])]]
+                start_frame = 0
+            if not cv_failed:
+                input_arr = np.zeros((dims[0], height, width), dtype=np.uint8)
+                counter = 0
+                cap.set(1, start_frame)
+                current_frame = start_frame
+                while True and counter < dims[0]:
+                    # Capture frame-by-frame
+                    if current_frame != subindices[0][counter]:
+                        current_frame = subindices[0][counter]
+                        cap.set(1, current_frame)
+                    ret, frame = cap.read()
+                    if not ret:
+                        break
+                    input_arr[counter] = frame[:, :, 0]
+                    counter += 1
+                    current_frame += 1
+
+                if len(subindices) > 1:
+                    input_arr = input_arr[:, subindices[1]]
+                if len(subindices) > 2:
+                    input_arr = input_arr[:, :, subindices[2]]
+            else: #use pims to load movie
+                import pims
+                def rgb2gray(rgb):
+                    return np.dot(rgb[...,:3], [0.299, 0.587, 0.114])
+                pims_movie = pims.Video(file_name)
+                length = len(pims_movie)
+                height, width = pims_movie.frame_shape[0:2] #shape is (h,w,channels)
+                input_arr = np.zeros((length, height, width), dtype=np.uint8)
+                for i in range(len(pims_movie)): #iterate over frames
+                    input_arr[i] = rgb2gray(pims_movie[i])
 
             # When everything done, release the capture
             cap.release()
@@ -1259,28 +1351,27 @@ def load(file_name,fr=30,start_time=0,meta_data=None,subindices=None,shape=None,
             if subindices is not None:
                 raise Exception('Subindices not implemented')
             with np.load(file_name) as f:
-                return movie(**f)
+                return movie(**f).astype(outtype)
 
-        elif extension == '.hdf5':
-
-            with h5py.File(file_name, "r") as f:
-                attrs = dict(f[var_name_hdf5].attrs)
-                if meta_data in attrs:
-                    attrs['meta_data'] = cpk.loads(attrs['meta_data'])
-
-                if subindices is None:
-                    return movie(f[var_name_hdf5], **attrs)
-                else:
-                    return movie(f[var_name_hdf5][subindices], **attrs)
+#        elif extension in ('.hdf5', '.h5'):
+#            with h5py.File(file_name, "r") as f:
+#                attrs = dict(f[var_name_hdf5].attrs)
+#                if meta_data in attrs:
+#                    attrs['meta_data'] = cpk.loads(attrs['meta_data'])
+#
+#                if subindices is None:
+#                    return movie(f[var_name_hdf5], **attrs).astype(outtype)
+#                else:
+#                    return movie(f[var_name_hdf5][subindices], **attrs).astype(outtype)
 
         elif extension == '.h5_at':
             with h5py.File(file_name, "r") as f:
                 if subindices is None:
-                    return movie(f['quietBlock'], fr=fr)
+                    return movie(f['quietBlock'], fr=fr).astype(outtype)
                 else:
-                    return movie(f['quietBlock'][subindices], fr=fr)
+                    return movie(f['quietBlock'][subindices], fr=fr).astype(outtype)
 
-        elif extension == '.h5':
+        elif extension in ('.hdf5', '.h5'):
             if is_behavior:
                 with h5py.File(file_name, "r") as f:
                     kk = list(f.keys())
@@ -1294,18 +1385,25 @@ def load(file_name,fr=30,start_time=0,meta_data=None,subindices=None,shape=None,
 
             else:
                 with h5py.File(file_name, "r") as f:
-                    if 'imaging' in f.keys():
+                    fkeys = list(f.keys())
+                    if len(fkeys) == 1:
+                        var_name_hdf5 = fkeys[0]
+                    if var_name_hdf5 in fkeys:
                         if subindices is None:
-                            images = np.array(f['imaging']).squeeze()
+                            images = np.array(f[var_name_hdf5]).squeeze()
                             if images.ndim > 3:
                                 images = images[:, 0]
                         else:
                             images = np.array(
-                                f['imaging'][subindices]).squeeze()
+                                f[var_name_hdf5][subindices]).squeeze()
                             if images.ndim > 3:
                                 images = images[:, 0]
 
-                        return movie(images.astype(np.float32))
+                        #input_arr = images
+                        return movie(images.astype(outtype))
+                    else:
+                        print('KEYS:'+str(f.keys()))
+                        raise Exception('Key not found in hdf5n file')
 
         elif extension == '.mmap':
 
@@ -1313,20 +1411,22 @@ def load(file_name,fr=30,start_time=0,meta_data=None,subindices=None,shape=None,
             Yr, dims, T = load_memmap(os.path.join(
                 os.path.split(file_name)[0], filename))
             images = np.reshape(Yr.T, [T] + list(dims), order='F')
+            if subindices is not None:
+                images = images[subindices]
 
             if in_memory:
                 print('loading in memory')
-                images = np.array(images)
+                images = np.array(images).astype(outtype)
 
             print('mmap')
             return movie(images, fr=fr)
 
         elif extension == '.sbx':
             if subindices is not None:
-                return movie(sbxreadskip(file_name[:-4], skip=subindices.step), fr=fr)
+                return movie(sbxreadskip(file_name[:-4], skip=subindices.step), fr=fr).astype(outtype)
             else:
                 print('sbx')
-                return movie(sbxread(file_name[:-4], k=0, n_frames=np.inf), fr=fr)
+                return movie(sbxread(file_name[:-4], k=0, n_frames=np.inf), fr=fr).astype(outtype)
 
         elif extension == '.sima':
             if not HAS_SIMA:
@@ -1338,10 +1438,10 @@ def load(file_name,fr=30,start_time=0,meta_data=None,subindices=None,shape=None,
                 input_arr = np.empty((
                     dataset.sequences[0].shape[0],
                     dataset.sequences[0].shape[2],
-                    dataset.sequences[0].shape[3]), dtype=np.float32)
+                    dataset.sequences[0].shape[3]), dtype=outtype)
                 for nframe in range(0, dataset.sequences[0].shape[0], frame_step):
                     input_arr[nframe:nframe + frame_step] = np.array(dataset.sequences[0][
-                        nframe:nframe + frame_step, 0, :, :, 0]).astype(np.float32).squeeze()
+                        nframe:nframe + frame_step, 0, :, :, 0]).astype(outtype).squeeze()
             else:
                 input_arr = np.array(dataset.sequences[0])[
                     subindices, :, :, :, :].squeeze()
@@ -1353,13 +1453,13 @@ def load(file_name,fr=30,start_time=0,meta_data=None,subindices=None,shape=None,
         print(file_name)
         raise Exception('File not found!')
 
-    return movie(input_arr, fr=fr, start_time=start_time, file_name=os.path.split(file_name)[-1], meta_data=meta_data)
+    return movie(input_arr.astype(outtype), fr=fr, start_time=start_time, file_name=os.path.split(file_name)[-1], meta_data=meta_data)
 
 
 def load_movie_chain(file_list, fr=30, start_time=0,
                      meta_data=None, subindices=None,
                      bottom=0, top=0, left=0, right=0, z_top = 0,
-                     z_bottom = 0, is3D = False, channel=None):
+                     z_bottom = 0, is3D = False, channel=None, outtype=np.float32):
     """ load movies from list of file names
 
     Parameters:
@@ -1384,7 +1484,7 @@ def load_movie_chain(file_list, fr=30, start_time=0,
     mov = []
     for f in tqdm(file_list):
         m = load(f, fr=fr, start_time=start_time,
-                 meta_data=meta_data, subindices=subindices, in_memory=True)
+                 meta_data=meta_data, subindices=subindices, in_memory=True, outtype=outtype)
         if channel is not None:
             print(m.shape)
             m = m[channel].squeeze()
@@ -1588,3 +1688,11 @@ def to_3D(mov2D, shape, order='F'):
     transform to 3D a vectorized movie
     """
     return np.reshape(mov2D, shape, order=order)
+
+
+def local_correlations_movie_parallel(params):
+
+        import caiman as cm
+        mv_name, idx, eight_neighbours, swap_dim, order_mean = params
+        mv = cm.load(mv_name,subindices=idx)
+        return mv.local_correlations(eight_neighbours=eight_neighbours, swap_dim=swap_dim, order_mean=order_mean)[None,:,:].astype(np.float32)

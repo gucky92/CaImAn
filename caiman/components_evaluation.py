@@ -12,6 +12,7 @@ from __future__ import print_function
 from builtins import range
 from past.utils import old_div
 import numpy as np
+import os
 from .utils.stats import mode_robust, mode_robust_fast
 from scipy.sparse import csc_matrix
 from scipy.stats import norm
@@ -19,6 +20,12 @@ import scipy
 import cv2
 import itertools
 from caiman.paths import caiman_datadir
+import warnings
+
+try:
+    cv2.setNumThreads(0)
+except:
+    pass
 
 def estimate_noise_mode(traces, robust_std=False, use_mode_fast=False, return_all=False):
     """ estimate the noise in the traces under assumption that signals are sparse and only positive. The last dimension should be time.
@@ -235,7 +242,7 @@ def classify_components_ep(Y, A, C, b, f, Athresh=0.1, Npeaks=5, tB=-3, tA=10, t
 #%%
 
 
-def evaluate_components_CNN(A, dims, gSig, model_name='model/cnn_model', patch_size=50, loaded_model=None, isGPU=False):
+def evaluate_components_CNN(A, dims, gSig, model_name=os.path.join(caiman_datadir(), 'model', 'cnn_model'), patch_size=50, loaded_model=None, isGPU=False):
     """ evaluate component quality using a CNN network
 
     """
@@ -447,7 +454,7 @@ def evaluate_components_placeholder(params):
 
 def estimate_components_quality_auto(Y, A, C, b, f, YrA, frate, decay_time, gSig, dims, dview=None, min_SNR=2, r_values_min=0.9,
                                      r_values_lowest=-1, Npeaks=10, use_cnn=True, thresh_cnn_min=0.95, thresh_cnn_lowest=0.1,
-                                     thresh_fitness_delta=-20., min_std_reject=0.5, gSig_range = None):
+                                     thresh_fitness_delta=-20., min_SNR_reject=0.5, gSig_range = None):
     ''' estimates the quality of component automatically
 
     Parameters:
@@ -491,7 +498,7 @@ def estimate_components_quality_auto(Y, A, C, b, f, YrA, frate, decay_time, gSig
     thresh_cnn_lowest:
         all samples with probabilities smaller than this are rejected
 
-    min_std_reject:
+    min_SNR_reject:
         adaptive way to set threshold (like min_SNR but used to discard components with std lower than this value)
 
     Returns:
@@ -522,7 +529,7 @@ def estimate_components_quality_auto(Y, A, C, b, f, YrA, frate, decay_time, gSig
     fitness_min = scipy.special.log_ndtr(-min_SNR) * N_samples
     # components with SNR lower than 0.5 will be rejected
     thresh_fitness_raw_reject = scipy.special.log_ndtr(
-        -min_std_reject) * N_samples
+        -min_SNR_reject) * N_samples
 
     traces = C + YrA
 
@@ -534,43 +541,53 @@ def estimate_components_quality_auto(Y, A, C, b, f, YrA, frate, decay_time, gSig
 
     idx_components, idx_components_bad, cnn_values = select_components_from_metrics(
                 A, dims, gSig, r_values,  comp_SNR, r_values_min,
-                r_values_lowest, min_SNR, min_std_reject,
+                r_values_lowest, min_SNR, min_SNR_reject,
                 thresh_cnn_min, thresh_cnn_lowest, use_cnn, gSig_range)
 
     return idx_components, idx_components_bad, comp_SNR, r_values, cnn_values
 
 #%%
-def select_components_from_metrics(A, dims, gSig, r_values,  comp_SNR, r_values_min,
-                                   r_values_lowest, min_SNR, min_std_reject,
-                                   thresh_cnn_min, thresh_cnn_lowest, use_cnn, gSig_range, neuron_class = 1):
-    '''
+def select_components_from_metrics(A, dims, gSig, r_values, comp_SNR,
+                                   r_values_min=0.8, r_values_lowest=-1,
+                                   min_SNR=2.5, min_SNR_reject=0.5,
+                                   thresh_cnn_min=0.8, thresh_cnn_lowest=0.1,
+                                   use_cnn=True, gSig_range=None,
+                                   neuron_class=1, predictions=None):
+    '''Selects components based on pre-computed metrics. For each metric
+    space correlation, trace SNR, and CNN classifier both an upper and a lower
+    thresholds are considered. A component is accepted if and only if it
+    exceeds the upper threshold for at least one of the metrics and the lower
+    threshold for all metrics. If the CNN classifier values are not provided,
+    or a different scale parameter is used, the values are computed from within
+    the script.
     '''
 
-    idx_components_r = np.where((r_values >= r_values_min))[0]
+    idx_components_r = np.where(r_values >= r_values_min)[0]
     idx_components_raw = np.where(comp_SNR > min_SNR)[0]
 
     idx_components = []
+
     if use_cnn:
           # normally 1
         if gSig_range is None:
-            predictions, _ = evaluate_components_CNN(A, dims, gSig)
-            predictions = predictions[:, neuron_class]
+            if predictions is None:
+                predictions, _ = evaluate_components_CNN(A, dims, gSig)
+                predictions = predictions[:, neuron_class]
         else:
             predictions = np.zeros(len(r_values))
             for size_range in gSig_range:
                 predictions = np.maximum(predictions,
                                          evaluate_components_CNN(A, dims, size_range)[0][:, neuron_class])
 
-
         idx_components_cnn = np.where(
             predictions >= thresh_cnn_min)[0]
-        bad_comps = np.where((r_values <= r_values_lowest) | (comp_SNR <= min_std_reject) | (
+        bad_comps = np.where((r_values <= r_values_lowest) | (comp_SNR <= min_SNR_reject) | (
             predictions <= thresh_cnn_lowest))[0]
         idx_components = np.union1d(idx_components, idx_components_cnn)
         cnn_values = predictions
     else:
         bad_comps = np.where((r_values <= r_values_lowest) | (
-            comp_SNR <= min_std_reject))[0]
+            comp_SNR <= min_SNR_reject))[0]
         cnn_values = []
 
     idx_components = np.union1d(idx_components, idx_components_r)
@@ -653,56 +670,58 @@ def estimate_components_quality(traces, Y, A, C, b, f, final_frate=30, Npeaks=10
                                 N=N, robust_std=False, Athresh=0.1, Npeaks=Npeaks, thresh_C=0.3)
 
     else:  # memory mapped case
-
-        Ncomp = A.shape[-1]
-        groups = grouper(num_traces_per_group, range(Ncomp))
-        params = []
-        for g in groups:
-            idx = list(g)
-            # idx = list(filter(None.__ne__, idx))
-            idx = list(filter(lambda a: a is not None, idx))
-            params.append([Y.filename, traces[idx], A.tocsc()[:, idx], C[idx], b, f,
-                           final_frate, remove_baseline, N, robust_std, Athresh, Npeaks, thresh_C])
-
-        if dview is None:
-            res = map(evaluate_components_placeholder, params)
-        else:
-            print('EVALUATING IN PARALLEL... NOT RETURNING ERFCs')
-            if 'multiprocessing' in str(type(dview)):
-                res = dview.map_async(
-                    evaluate_components_placeholder, params).get(4294967)
-            else:
-                res = dview.map_sync(evaluate_components_placeholder, params)
-
         fitness_raw = []
         fitness_delta = []
         erfc_raw = []
         erfc_delta = []
         r_values = []
+        Ncomp = A.shape[-1]
 
-        for r_ in res:
-            fitness_raw__, fitness_delta__, erfc_raw__, erfc_delta__, r_values__, _ = r_
-            fitness_raw = np.concatenate([fitness_raw, fitness_raw__])
-            fitness_delta = np.concatenate([fitness_delta, fitness_delta__])
-            r_values = np.concatenate([r_values, r_values__])
-
-            if len(erfc_raw) == 0:
-                erfc_raw = erfc_raw__
-                erfc_delta = erfc_delta__
+        if Ncomp > 0:
+            groups = grouper(num_traces_per_group, range(Ncomp))
+            params = []
+            for g in groups:
+                idx = list(g)
+                # idx = list(filter(None.__ne__, idx))
+                idx = list(filter(lambda a: a is not None, idx))
+                params.append([Y.filename, traces[idx], A.tocsc()[:, idx], C[idx], b, f,
+                               final_frate, remove_baseline, N, robust_std, Athresh, Npeaks, thresh_C])
+    
+            if dview is None:
+                res = map(evaluate_components_placeholder, params)
             else:
-                erfc_raw = np.concatenate([erfc_raw, erfc_raw__], axis=0)
-                erfc_delta = np.concatenate([erfc_delta, erfc_delta__], axis=0)
+                print('EVALUATING IN PARALLEL... NOT RETURNING ERFCs')
+                if 'multiprocessing' in str(type(dview)):
+                    res = dview.map_async(
+                        evaluate_components_placeholder, params).get(4294967)
+                else:
+                    res = dview.map_sync(evaluate_components_placeholder, params)
+    
+            for r_ in res:
+                fitness_raw__, fitness_delta__, erfc_raw__, erfc_delta__, r_values__, _ = r_
+                fitness_raw = np.concatenate([fitness_raw, fitness_raw__])
+                fitness_delta = np.concatenate([fitness_delta, fitness_delta__])
+                r_values = np.concatenate([r_values, r_values__])
+    
+                if len(erfc_raw) == 0:
+                    erfc_raw = erfc_raw__
+                    erfc_delta = erfc_delta__
+                else:
+                    erfc_raw = np.concatenate([erfc_raw, erfc_raw__], axis=0)
+                    erfc_delta = np.concatenate([erfc_delta, erfc_delta__], axis=0)
+        else:
+            warnings.warn("There were no components to evaluate. Check your parameter settings.")
 
-    idx_components_r = np.where(r_values >= r_values_min)[0]     # threshold on space consistency
-    idx_components_raw = np.where(fitness_raw < fitness_min)[0]  # threshold on time variability
+    idx_components_r = np.where(np.array(r_values) >= r_values_min)[0]     # threshold on space consistency
+    idx_components_raw = np.where(np.array(fitness_raw) < fitness_min)[0]  # threshold on time variability
     # threshold on time variability (if nonsparse activity)
-    idx_components_delta = np.where(fitness_delta < fitness_delta_min)[0]
+    idx_components_delta = np.where(np.array(fitness_delta) < fitness_delta_min)[0]
 
     idx_components = np.union1d(idx_components_r, idx_components_raw)
     idx_components = np.union1d(idx_components, idx_components_delta)
     idx_components_bad = np.setdiff1d(list(range(len(traces))), idx_components)
 
     if return_all:
-        return idx_components, idx_components_bad, fitness_raw, fitness_delta, r_values
+        return idx_components, idx_components_bad, np.array(fitness_raw), np.array(fitness_delta), np.array(r_values)
     else:
         return idx_components, idx_components_bad

@@ -34,7 +34,10 @@ from .mmapping import load_memmap
 from multiprocessing import Pool
 import multiprocessing
 import platform
+import logging
 
+
+logger = logging.getLogger(__name__)
 #%%
 
 
@@ -238,8 +241,7 @@ def start_server(slurm_script=None, ipcluster="ipcluster", ncpus=None):
         ipcluster binary file name; requires 4 path separators on Windows. ipcluster="C:\\\\Anaconda2\\\\Scripts\\\\ipcluster.exe"
          Default: "ipcluster"
     """
-    sys.stdout.write("Starting cluster...")
-    sys.stdout.flush()
+    logger.info("Starting cluster...")
     if ncpus is None:
         ncpus = psutil.cpu_count()
 
@@ -252,19 +254,13 @@ def start_server(slurm_script=None, ipcluster="ipcluster", ncpus=None):
                 "{0} start -n {1}".format(ipcluster, ncpus)), shell=True, close_fds=(os.name != 'nt'))
 
         # Check that all processes have started
-        time.sleep(1)
         client = ipyparallel.Client()
         while len(client) < ncpus:
-            sys.stdout.write(".")
-            sys.stdout.flush()
-            client.close()
-
-            time.sleep(1)
-            client = ipyparallel.Client()
-        print('Making Sure everything is up and running')
-        time.sleep(10)
-        client.close()
-
+            sys.stdout.write(".")  # Give some visual feedback of things starting
+            sys.stdout.flush()     # (de-buffered)
+            time.sleep(0.5)
+        logger.debug('Making sure everything is up and running')
+        client.direct_view().execute('__a=1', block=True)  # when done on all, we're set to go
     else:
         shell_source(slurm_script)
         pdir, profile = os.environ['IPPPDIR'], os.environ['IPPPROFILE']
@@ -274,7 +270,7 @@ def start_server(slurm_script=None, ipcluster="ipcluster", ncpus=None):
         ne = len(ee)
         print(('Running on %d engines.' % (ne)))
         c.close()
-        sys.stdout.write(" done\n")
+        sys.stdout.write("start_server: done\n")
 
 
 #%%
@@ -313,13 +309,12 @@ def stop_server(ipcluster='ipcluster', pdir=None, profile=None, dview=None):
     if 'multiprocessing' in str(type(dview)):
         dview.terminate()
     else:
-        sys.stdout.write("Stopping cluster...\n")
-        sys.stdout.flush()
+        logger.info("Stopping cluster...")
         try:
             pdir, profile = os.environ['IPPPDIR'], os.environ['IPPPROFILE']
             is_slurm = True
         except:
-            print('NOT SLURM')
+            logger.debug('stop_server: not a slurm cluster')
             is_slurm = False
 
         if is_slurm:
@@ -353,11 +348,10 @@ def stop_server(ipcluster='ipcluster', pdir=None, profile=None, dview=None):
 
             line_out = proc.stderr.readline()
             if b'CRITICAL' in line_out:
-                sys.stdout.write("No cluster to stop...")
-                sys.stdout.flush()
+                logger.info("No cluster to stop...")
             elif b'Stopping' in line_out:
                 st = time.time()
-                sys.stdout.write('Waiting for cluster to stop...')
+                logger.debug('Waiting for cluster to stop...')
                 while (time.time() - st) < 4:
                     sys.stdout.write('.')
                     sys.stdout.flush()
@@ -369,18 +363,24 @@ def stop_server(ipcluster='ipcluster', pdir=None, profile=None, dview=None):
 
             proc.stderr.close()
 
-    sys.stdout.write(" done\n")
+    logger.info("stop_cluster(): done")
 #%%
 
 
 def setup_cluster(backend='multiprocessing', n_processes=None, single_thread=False):
-    """ If necessary, restart the pipyparallel cluster. If we have a slurm backend,
-        restart that instead.
-
+    """Setup and/or restart a parallel cluster.
     Parameters:
     ----------
     backend: str
-        'multiprocessing', 'ipyparallel', and 'SLURM'
+        'multiprocessing' [alias 'local'], 'ipyparallel', and 'SLURM'
+        ipyparallel and SLURM backends try to restart if cluster running.
+        backend='multiprocessing' raises an exception if a cluster is running.
+
+    Returns:
+    ----------
+        c: ipyparallel.Client object; only used for ipyparallel and SLURM backends, else None
+        dview: ipyparallel dview object, or for multiprocessing: Pool object
+        n_processes: number of workers in dview. None means guess at number of machine cores.
     """
     #todo: todocument
 
@@ -413,7 +413,7 @@ def setup_cluster(backend='multiprocessing', n_processes=None, single_thread=Fal
             stop_server()
             start_server(ncpus=n_processes)
             c = Client()
-            print(('Using ' + str(len(c)) + ' processes'))
+            logger.info('Started ipyparallel cluster: Using ' + str(len(c)) + ' processes')
             dview = c[:len(c)]
 
         elif (backend == 'multiprocessing') or (backend == 'local'):
@@ -421,7 +421,17 @@ def setup_cluster(backend='multiprocessing', n_processes=None, single_thread=Fal
                 raise Exception(
                     'A cluster is already runnning. Terminate with dview.terminate() if you want to restart.')
             if (platform.system() == 'Darwin') and (sys.version_info > (3, 0)):
-                multiprocessing.set_start_method('forkserver', force=True)
+                try:
+                    if 'kernel' in get_ipython().trait_names(): # If you're on OSX and you're running under Jupyter or Spyder,
+                                                                # which already run the code in a forkserver-friendly way, this
+                                                                # can eliminate some setup and make this a reasonable approach.
+                                                                # Otherwise, seting VECLIB_MAXIMUM_THREADS=1 or using a different
+                                                                # blas/lapack is the way to avoid the issues.
+                                                                # See https://github.com/flatironinstitute/CaImAn/issues/206 for more
+                                                                # info on why we're doing this (for now).
+                        multiprocessing.set_start_method('forkserver', force=True)
+                except: # If we're not running under ipython, don't do anything.
+                    pass
             c = None
             
             dview = Pool(n_processes)

@@ -89,20 +89,21 @@ def cnmf_patches(args_in):
     from . import cnmf
     file_name, idx_, shapes, options = args_in
 
+    logger = logging.getLogger(__name__)
     name_log = os.path.basename(
         file_name[:-5]) + '_LOG_ ' + str(idx_[0]) + '_' + str(idx_[-1])
-    logger = logging.getLogger(name_log)
-    hdlr = logging.FileHandler('./' + name_log)
-    formatter = logging.Formatter('%(asctime)s %(levelname)s %(message)s')
-    hdlr.setFormatter(formatter)
-    logger.addHandler(hdlr)
-    logger.setLevel(logging.INFO)
+    #logger = logging.getLogger(name_log)
+    #hdlr = logging.FileHandler('./' + name_log)
+    #formatter = logging.Formatter('%(asctime)s %(levelname)s %(message)s')
+    #hdlr.setFormatter(formatter)
+    #logger.addHandler(hdlr)
+    #logger.setLevel(logging.INFO)
 
     p = options['temporal_params']['p']
 
-    logger.info('START')
+    logger.debug(name_log+'START')
 
-    logger.info('Read file')
+    logger.debug(name_log+'Read file')
     Yr, dims, timesteps = load_memmap(file_name)
 
     # slicing array (takes the min and max index in n-dimensional space and cuts the box they define)
@@ -121,7 +122,7 @@ def cnmf_patches(args_in):
     else:
         images = images[slices]
 
-    logger.info('file loaded')
+    logger.debug(name_log+'file loaded')
 
     if (np.sum(np.abs(np.diff(images.reshape(timesteps, -1).T)))) > 0.1:
 
@@ -148,7 +149,6 @@ def cnmf_patches(args_in):
                         ring_size_factor=options['init_params']['ring_size_factor'],
                         center_psf=options['init_params']['center_psf'],
                         ssub_B=options['init_params']['ssub_B'],
-                        compute_B_3x=options['init_params']['compute_B_3x'],
                         init_iter=options['init_params']['init_iter'])
 
         cnm = cnm.fit(images)
@@ -326,7 +326,7 @@ def run_CNMF_patches(file_name, shape, options, rf=16, stride=4, gnb=1, dview=No
     else:
          S_tot = None
     YrA_tot = np.zeros((count, T), dtype=np.float32)
-    F_tot = np.zeros((num_patches * nb_patch, T), dtype=np.float32)
+    F_tot = np.zeros((max(0, num_patches * nb_patch), T), dtype=np.float32)
     mask = np.zeros(d, dtype=np.uint8)
     sn_tot = np.zeros((d))
 
@@ -361,7 +361,10 @@ def run_CNMF_patches(file_name, shape, options, rf=16, stride=4, gnb=1, dview=No
                 idx_ptr_B.append(len(idx_))
                 # F_tot[patch_id, :] = f[ii, :]
                 count_bgr += 1
-            F_tot[patch_id * nb_patch:(patch_id + 1) * nb_patch] = f
+            if nb_patch >= 0:
+                F_tot[patch_id * nb_patch:(patch_id + 1) * nb_patch] = f
+            else:  # full background per patch
+                F_tot = np.concatenate([F_tot, f])
 
             for ii in range(np.shape(A)[-1]):
                 new_comp = A[:, ii]  # / np.sqrt(A[:, ii].power(2).sum())
@@ -390,14 +393,16 @@ def run_CNMF_patches(file_name, shape, options, rf=16, stride=4, gnb=1, dview=No
     else:
         B_tot = scipy.sparse.csc_matrix((d, count_bgr), dtype=np.float32)
 
-    idx_tot_A = np.concatenate(idx_tot_A)
-    a_tot = np.concatenate(a_tot)
-    idx_ptr_A = np.cumsum(np.array(idx_ptr_A))
+    if len(idx_tot_A):
+        idx_tot_A = np.concatenate(idx_tot_A)
+        a_tot = np.concatenate(a_tot)
+        idx_ptr_A = np.cumsum(np.array(idx_ptr_A))
     A_tot = scipy.sparse.csc_matrix(
-        (a_tot, idx_tot_A, idx_ptr_A), shape=(d, count))
+        (a_tot, idx_tot_A, idx_ptr_A), shape=(d, count), dtype=np.float32)
 
     C_tot = C_tot[:count, :]
     YrA_tot = YrA_tot[:count, :]
+    F_tot = F_tot[:count_bgr]
 
     optional_outputs = dict()
     optional_outputs['b_tot'] = b_tot
@@ -427,7 +432,7 @@ def run_CNMF_patches(file_name, shape, options, rf=16, stride=4, gnb=1, dview=No
         f = None
     elif low_rank_background is None:
         b = Im.dot(B_tot)
-        f = F_tot
+        f = scipy.sparse.csr_matrix(F_tot)
         print("Leaving background components intact")
     elif low_rank_background:
         print("Compressing background components with a low rank NMF")

@@ -26,7 +26,14 @@ import numpy as np
 import scipy
 import os
 from scipy.ndimage.filters import gaussian_filter
+from tifffile import TiffFile
 import cv2
+
+try:
+    cv2.setNumThreads(0)
+except:
+    pass
+
 try:
     from urllib2 import urlopen
 except ImportError:
@@ -89,7 +96,7 @@ def download_demo(name='Sue_2x_3000_40_-46.tif', save_folder=''):
         else:
             print("File already downloaded")
     else:
-        raise Exception('You are in ' + os.getcwd() + ' and must be in caiman folder')
+        raise Exception('Cannot find the example_movies folder in your caiman_datadir - did you make one with caimanmanager.py?')
     return path_movie
 
 def val_parse(v):
@@ -158,23 +165,9 @@ def get_image_description_SI(fname):
 
         image_description: information of the image
 
-    Raise:
-    -----
-        ('tifffile package not found, using skimage.external.tifffile')
-
-
     """
 
     image_descriptions = []
-
-    try:
-        # todo check this unresolved reference
-        from tifffile import TiffFile
-
-    except:
-
-        print('tifffile package not found, using skimage.external.tifffile')
-        from skimage.external.tifffile import TiffFile
 
     tf = TiffFile(fname)
 
